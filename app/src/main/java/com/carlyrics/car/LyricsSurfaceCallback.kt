@@ -87,14 +87,7 @@ class LyricsSurfaceCallback : SurfaceCallback {
             val track = MediaState.current
             canvas.drawColor(BACKGROUND_COLOR)
             val area = drawableArea(canvas, container)
-            val lyricArea = Rect(area)
-            if (track != null) {
-                val headerBottom = drawSongInfo(canvas, area, track)
-                lyricArea.top = lyricArea.top.coerceAtLeast(
-                    headerBottom + HEADER_TO_LYRIC_GAP.roundToInt()
-                )
-            }
-            drawCenteredLyrics(canvas, lyricArea, track)
+            drawCenteredLyrics(canvas, area, track)
             Log.d(
                 TAG,
                 "render canvas=${canvas.width}x${canvas.height} area=$area track=$track"
@@ -156,26 +149,6 @@ class LyricsSurfaceCallback : SurfaceCallback {
         }
     }
 
-    private fun drawSongInfo(canvas: Canvas, area: Rect, track: TrackInfo): Int {
-        val maxWidth = (area.width() - HEADER_HORIZONTAL_MARGIN * 2f).coerceAtLeast(1f)
-        val cx = area.exactCenterX()
-        val top = area.top + HEADER_TOP_MARGIN
-        val title = ellipsize(track.title, META_TITLE_PAINT, maxWidth)
-        val artist = track.artist
-            ?.takeIf { it.isNotBlank() }
-            ?.let { ellipsize(it, META_ARTIST_PAINT, maxWidth) }
-
-        var baseline = top - META_TITLE_PAINT.ascent()
-        canvas.drawText(title, cx, baseline, META_TITLE_PAINT)
-
-        if (artist != null) {
-            baseline += lineHeight(META_TITLE_PAINT) + HEADER_LINE_GAP
-            canvas.drawText(artist, cx, baseline, META_ARTIST_PAINT)
-        }
-
-        return (baseline + META_ARTIST_PAINT.descent()).roundToInt()
-    }
-
     private fun lyricDisplay(track: TrackInfo): String =
         when (val lyrics = track.lyrics) {
             LyricsState.Loading -> "Finding lyrics..."
@@ -215,16 +188,6 @@ class LyricsSurfaceCallback : SurfaceCallback {
         if (!lyrics.synced || track.playbackSpeed <= 0f) return
 
         mainHandler.postDelayed(ticker, TICK_MILLIS)
-    }
-
-    private fun ellipsize(text: String, paint: Paint, maxWidth: Float): String {
-        if (paint.measureText(text) <= maxWidth) return text
-
-        val available = maxWidth - paint.measureText(ELLIPSIS)
-        if (available <= 0f) return ELLIPSIS
-
-        val count = paint.breakText(text, true, available, null)
-        return text.take(count).trimEnd() + ELLIPSIS
     }
 
     private fun fitText(
@@ -289,7 +252,7 @@ class LyricsSurfaceCallback : SurfaceCallback {
 
     companion object {
         private const val TAG = "LyricsSurfaceCallback"
-        private const val BACKGROUND_COLOR = Color.WHITE
+        private const val BACKGROUND_COLOR = 0xFF0A0A0A.toInt()
         private const val TICK_MILLIS = 350L
         private const val HORIZONTAL_MARGIN_RATIO = 0.08f
         private const val VERTICAL_MARGIN_RATIO = 0.12f
@@ -301,33 +264,14 @@ class LyricsSurfaceCallback : SurfaceCallback {
         private const val MIN_TITLE_TEXT_SIZE = 34f
         private const val TEXT_SIZE_STEP = 2f
         private const val LINE_SPACING_MULTIPLIER = 1.08f
-        private const val HEADER_TOP_MARGIN = 24f
-        private const val HEADER_HORIZONTAL_MARGIN = 48f
-        private const val HEADER_LINE_GAP = 2f
-        private const val HEADER_TO_LYRIC_GAP = 12f
-        private const val ELLIPSIS = "..."
 
         private val TITLE_PAINT = Paint().apply {
-            color = Color.BLACK
+            color = Color.WHITE
             textSize = MAX_TITLE_TEXT_SIZE
             textAlign = Paint.Align.CENTER
             isAntiAlias = true
             isFakeBoldText = true
-        }
-
-        private val META_TITLE_PAINT = Paint().apply {
-            color = Color.BLACK
-            textSize = 34f
-            textAlign = Paint.Align.CENTER
-            isAntiAlias = true
-            isFakeBoldText = true
-        }
-
-        private val META_ARTIST_PAINT = Paint().apply {
-            color = 0xFF4F555B.toInt()
-            textSize = 28f
-            textAlign = Paint.Align.CENTER
-            isAntiAlias = true
+            setShadowLayer(8f, 0f, 2f, Color.BLACK)
         }
     }
 }
