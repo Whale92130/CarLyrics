@@ -23,7 +23,6 @@ data class TrackInfo(
         get() = listOf(
             normalize(title),
             normalize(artist),
-            normalize(album),
             durationMillis?.let { ((it + 500L) / 1_000L).toString() }.orEmpty()
         ).joinToString("|")
 

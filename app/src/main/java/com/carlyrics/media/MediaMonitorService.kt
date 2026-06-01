@@ -17,6 +17,7 @@ import com.carlyrics.AppReset
 import com.carlyrics.lyrics.LrcLibClient
 import com.carlyrics.lyrics.LyricsQuery
 import com.carlyrics.lyrics.LyricsState
+import kotlin.math.abs
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 
@@ -155,7 +156,7 @@ class MediaMonitorService : NotificationListenerService() {
             return
         }
 
-        val track = TrackInfo(
+        val observedTrack = TrackInfo(
             title = title.trim(),
             artist = artist?.trim()?.takeIf { it.isNotEmpty() },
             album = album?.trim()?.takeIf { it.isNotEmpty() },
@@ -168,15 +169,10 @@ class MediaMonitorService : NotificationListenerService() {
             albumColors = extractAlbumColors(metadata)
         )
 
-        val current = MediaState.current
-        val trackWithLyrics = if (current?.lookupKey == track.lookupKey) {
-            track.copy(lyrics = current.lyrics)
-        } else {
-            track
-        }
+        val track = mergeWithCurrent(observedTrack, MediaState.current)
 
-        MediaState.set(trackWithLyrics)
-        maybeFetchLyrics(trackWithLyrics)
+        MediaState.set(track)
+        maybeFetchLyrics(track)
     }
 
     private fun resetAndRefetchLyrics() {
@@ -210,6 +206,7 @@ class MediaMonitorService : NotificationListenerService() {
             mainHandler.post {
                 val current = MediaState.current ?: return@post
                 if (current.lookupKey == lookupKey) {
+                    if (current.lyrics is LyricsState.Found) return@post
                     MediaState.set(current.copy(lyrics = result))
                 }
             }
@@ -235,6 +232,49 @@ class MediaMonitorService : NotificationListenerService() {
 
         return dominantColors(bitmap)
     }
+
+    private fun mergeWithCurrent(observed: TrackInfo, current: TrackInfo?): TrackInfo {
+        if (current == null || !isSameLikelySong(observed, current)) return observed
+
+        return observed.copy(
+            artist = observed.artist ?: current.artist,
+            album = observed.album ?: current.album,
+            durationMillis = when {
+                observed.durationMillis == null -> current.durationMillis
+                current.durationMillis != null &&
+                    durationsCompatible(observed.durationMillis, current.durationMillis) -> {
+                    current.durationMillis
+                }
+                else -> observed.durationMillis
+            },
+            albumColors = observed.albumColors.ifEmpty { current.albumColors },
+            lyrics = current.lyrics
+        )
+    }
+
+    private fun isSameLikelySong(first: TrackInfo, second: TrackInfo): Boolean =
+        normalize(first.title) == normalize(second.title) &&
+            artistsCompatible(first.artist, second.artist) &&
+            durationsCompatible(first.durationMillis, second.durationMillis)
+
+    private fun artistsCompatible(first: String?, second: String?): Boolean {
+        val left = normalize(first)
+        val right = normalize(second)
+        if (left.isEmpty() || right.isEmpty()) return true
+        return left == right || left.contains(right) || right.contains(left)
+    }
+
+    private fun durationsCompatible(first: Long?, second: Long?): Boolean {
+        if (first == null || second == null) return true
+        return abs(first - second) <= SAME_SONG_DURATION_TOLERANCE_MILLIS
+    }
+
+    private fun normalize(value: String?): String =
+        value
+            ?.trim()
+            ?.lowercase()
+            ?.replace(Regex("\\s+"), " ")
+            .orEmpty()
 
     private fun dominantColors(bitmap: Bitmap): List<Int> {
         val counts = mutableMapOf<Int, Int>()
@@ -291,6 +331,7 @@ class MediaMonitorService : NotificationListenerService() {
         private const val MIN_COLOR_ALPHA = 128
         private const val MIN_COLOR_VALUE = 0.12f
         private const val MAX_ALBUM_COLORS = 5
+        private const val SAME_SONG_DURATION_TOLERANCE_MILLIS = 3_000L
 
         /**
          * Wrapper apps that proxy other media sessions for Android Auto purposes
