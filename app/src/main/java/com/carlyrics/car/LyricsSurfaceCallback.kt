@@ -87,10 +87,10 @@ class LyricsSurfaceCallback : SurfaceCallback {
             val track = MediaState.current
             canvas.drawColor(BACKGROUND_COLOR)
             val area = drawableArea(canvas, container)
-            if (track != null) {
-                drawSongHeader(canvas, area, track)
-            }
             drawCenteredLyrics(canvas, area, track)
+            if (track != null) {
+                drawSongFooter(canvas, area, track)
+            }
             Log.d(
                 TAG,
                 "render canvas=${canvas.width}x${canvas.height} area=$area track=$track"
@@ -124,21 +124,13 @@ class LyricsSurfaceCallback : SurfaceCallback {
         return base
     }
 
-    private fun drawSongHeader(canvas: Canvas, area: Rect, track: TrackInfo) {
-        val maxWidth = (area.width() - HEADER_HORIZONTAL_MARGIN * 2f).coerceAtLeast(1f)
-        val left = area.left + HEADER_HORIZONTAL_MARGIN
-        val title = ellipsize(track.title, META_TITLE_PAINT, maxWidth)
-        val artist = track.artist
-            ?.takeIf { it.isNotBlank() }
-            ?.let { ellipsize(it, META_ARTIST_PAINT, maxWidth) }
-
-        var baseline = area.top + HEADER_TOP_MARGIN - META_TITLE_PAINT.ascent()
-        canvas.drawText(title, left, baseline, META_TITLE_PAINT)
-
-        if (artist != null) {
-            baseline += lineHeight(META_TITLE_PAINT) + HEADER_LINE_GAP
-            canvas.drawText(artist, left, baseline, META_ARTIST_PAINT)
-        }
+    private fun drawSongFooter(canvas: Canvas, area: Rect, track: TrackInfo) {
+        val maxWidth = (area.width() - FOOTER_HORIZONTAL_MARGIN * 2f).coerceAtLeast(1f)
+        val label = listOfNotNull(track.title, track.artist)
+            .joinToString(" - ")
+        val text = ellipsize(label, META_PAINT, maxWidth)
+        val baseline = area.bottom - FOOTER_BOTTOM_MARGIN - META_PAINT.descent()
+        canvas.drawText(text, area.exactCenterX(), baseline, META_PAINT)
     }
 
     private fun drawCenteredLyrics(canvas: Canvas, area: Rect, track: TrackInfo?) {
@@ -294,9 +286,8 @@ class LyricsSurfaceCallback : SurfaceCallback {
         private const val MIN_TITLE_TEXT_SIZE = 34f
         private const val TEXT_SIZE_STEP = 2f
         private const val LINE_SPACING_MULTIPLIER = 1.08f
-        private const val HEADER_TOP_MARGIN = 18f
-        private const val HEADER_HORIZONTAL_MARGIN = 36f
-        private const val HEADER_LINE_GAP = 0f
+        private const val FOOTER_BOTTOM_MARGIN = 18f
+        private const val FOOTER_HORIZONTAL_MARGIN = 48f
         private const val ELLIPSIS = "..."
 
         private val TITLE_PAINT = Paint().apply {
@@ -308,20 +299,12 @@ class LyricsSurfaceCallback : SurfaceCallback {
             setShadowLayer(8f, 0f, 2f, Color.BLACK)
         }
 
-        private val META_TITLE_PAINT = Paint().apply {
+        private val META_PAINT = Paint().apply {
             color = Color.WHITE
             textSize = 24f
-            textAlign = Paint.Align.LEFT
+            textAlign = Paint.Align.CENTER
             isAntiAlias = true
             isFakeBoldText = true
-            setShadowLayer(6f, 0f, 2f, Color.BLACK)
-        }
-
-        private val META_ARTIST_PAINT = Paint().apply {
-            color = 0xFFB8B8B8.toInt()
-            textSize = 20f
-            textAlign = Paint.Align.LEFT
-            isAntiAlias = true
             setShadowLayer(6f, 0f, 2f, Color.BLACK)
         }
     }
