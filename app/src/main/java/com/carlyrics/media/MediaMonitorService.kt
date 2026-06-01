@@ -11,8 +11,10 @@ import android.os.SystemClock
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
+import com.carlyrics.AppReset
 import com.carlyrics.lyrics.LrcLibClient
 import com.carlyrics.lyrics.LyricsQuery
+import com.carlyrics.lyrics.LyricsState
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 
@@ -48,6 +50,9 @@ class MediaMonitorService : NotificationListenerService() {
         MediaSessionManager.OnActiveSessionsChangedListener { controllers ->
             attachToBestController(controllers.orEmpty())
         }
+    private val resetListener = AppReset.Listener {
+        mainHandler.post { resetAndRefetchLyrics() }
+    }
 
     private var attached: MediaController? = null
     private var lyricsRequest: Future<*>? = null
@@ -71,6 +76,7 @@ class MediaMonitorService : NotificationListenerService() {
                 sessionsChangedListener,
                 componentName
             )
+            AppReset.observe(resetListener)
             attachToBestController(sessionManager.getActiveSessions(componentName))
         } catch (e: SecurityException) {
             Log.w(TAG, "Permission not granted yet", e)
@@ -82,11 +88,13 @@ class MediaMonitorService : NotificationListenerService() {
         runCatching {
             sessionManager.removeOnActiveSessionsChangedListener(sessionsChangedListener)
         }
+        AppReset.stopObserving(resetListener)
         detach()
         clearTrack()
     }
 
     override fun onDestroy() {
+        AppReset.stopObserving(resetListener)
         lyricsRequest?.cancel(true)
         lyricsExecutor.shutdownNow()
         super.onDestroy()
@@ -166,6 +174,26 @@ class MediaMonitorService : NotificationListenerService() {
 
         MediaState.set(trackWithLyrics)
         maybeFetchLyrics(trackWithLyrics)
+    }
+
+    private fun resetAndRefetchLyrics() {
+        Log.d(TAG, "Reset requested; refreshing media state and lyrics")
+
+        val current = MediaState.current
+        if (current == null) {
+            runCatching {
+                attachToBestController(sessionManager.getActiveSessions(componentName))
+            }.onFailure { error ->
+                Log.w(TAG, "Could not refresh active sessions during reset", error)
+            }
+            return
+        }
+
+        lastLyricsLookupKey = null
+        lyricsRequest?.cancel(true)
+        val resetTrack = current.copy(lyrics = LyricsState.Loading)
+        MediaState.set(resetTrack)
+        maybeFetchLyrics(resetTrack)
     }
 
     private fun maybeFetchLyrics(track: TrackInfo) {

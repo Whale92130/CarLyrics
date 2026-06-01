@@ -8,6 +8,7 @@ import androidx.car.app.model.ListTemplate
 import androidx.car.app.model.Row
 import androidx.car.app.model.Template
 import androidx.car.app.model.Toggle
+import com.carlyrics.AppReset
 
 class LyricsMenuScreen(carContext: CarContext) : Screen(carContext) {
 
@@ -27,10 +28,12 @@ class LyricsMenuScreen(carContext: CarContext) : Screen(carContext) {
 
         val resetRow = Row.Builder()
             .setTitle("Reset")
-            .addText("Restore default display settings")
+            .addText("Restore defaults and fetch lyrics again")
             .setOnClickListener {
                 LyricsDisplaySettings.reset()
+                AppReset.request()
                 invalidate()
+                finish()
             }
             .build()
 
