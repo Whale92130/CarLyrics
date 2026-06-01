@@ -1,6 +1,8 @@
 package com.carlyrics.media
 
 import android.content.ComponentName
+import android.graphics.Bitmap
+import android.graphics.Color
 import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
@@ -162,7 +164,8 @@ class MediaMonitorService : NotificationListenerService() {
             playbackSpeed = playbackState?.playbackSpeed ?: 0f,
             playbackUpdatedAtElapsedMillis = playbackState?.lastPositionUpdateTime
                 ?.takeIf { it > 0L }
-                ?: SystemClock.elapsedRealtime()
+                ?: SystemClock.elapsedRealtime(),
+            albumColors = extractAlbumColors(metadata)
         )
 
         val current = MediaState.current
@@ -224,6 +227,52 @@ class MediaMonitorService : NotificationListenerService() {
         return position.takeIf { it != PlaybackState.PLAYBACK_POSITION_UNKNOWN && it >= 0L }
     }
 
+    private fun extractAlbumColors(metadata: MediaMetadata): List<Int> {
+        val bitmap = metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
+            ?: metadata.getBitmap(MediaMetadata.METADATA_KEY_ART)
+            ?: metadata.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON)
+            ?: return emptyList()
+
+        return dominantColors(bitmap)
+    }
+
+    private fun dominantColors(bitmap: Bitmap): List<Int> {
+        val counts = mutableMapOf<Int, Int>()
+        val step = (minOf(bitmap.width, bitmap.height) / COLOR_SAMPLE_SIZE).coerceAtLeast(1)
+        val hsv = FloatArray(3)
+
+        for (y in 0 until bitmap.height step step) {
+            for (x in 0 until bitmap.width step step) {
+                val color = bitmap.getPixel(x, y)
+                if (Color.alpha(color) < MIN_COLOR_ALPHA) continue
+
+                Color.colorToHSV(color, hsv)
+                if (hsv[2] < MIN_COLOR_VALUE) continue
+
+                val bucket = Color.rgb(
+                    (Color.red(color) / COLOR_BUCKET_SIZE) * COLOR_BUCKET_SIZE,
+                    (Color.green(color) / COLOR_BUCKET_SIZE) * COLOR_BUCKET_SIZE,
+                    (Color.blue(color) / COLOR_BUCKET_SIZE) * COLOR_BUCKET_SIZE
+                )
+                counts[bucket] = (counts[bucket] ?: 0) + 1
+            }
+        }
+
+        return counts.entries
+            .sortedWith(
+                compareByDescending<Map.Entry<Int, Int>> { entry ->
+                    Color.colorToHSV(entry.key, hsv)
+                    entry.value * (0.65f + hsv[1])
+                }
+            )
+            .map { it.key }
+            .distinctBy { color ->
+                Color.colorToHSV(color, hsv)
+                "${(hsv[0] / 24f).toInt()}-${(hsv[1] * 4f).toInt()}"
+            }
+            .take(MAX_ALBUM_COLORS)
+    }
+
     private fun TrackInfo.toLyricsQuery(): LyricsQuery =
         LyricsQuery(
             trackName = title,
@@ -237,6 +286,11 @@ class MediaMonitorService : NotificationListenerService() {
 
     companion object {
         private const val TAG = "MediaMonitorService"
+        private const val COLOR_SAMPLE_SIZE = 48
+        private const val COLOR_BUCKET_SIZE = 32
+        private const val MIN_COLOR_ALPHA = 128
+        private const val MIN_COLOR_VALUE = 0.12f
+        private const val MAX_ALBUM_COLORS = 5
 
         /**
          * Wrapper apps that proxy other media sessions for Android Auto purposes

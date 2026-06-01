@@ -37,6 +37,19 @@ class LyricsMenuScreen(carContext: CarContext) : Screen(carContext) {
             }
             .build()
 
+        val visualizerRow = Row.Builder()
+            .setTitle("Reactive background")
+            .addText("Use album colors behind lyrics")
+            .setToggle(
+                Toggle.Builder { enabled ->
+                    LyricsDisplaySettings.setVisualizerEnabled(enabled)
+                    invalidate()
+                }
+                    .setChecked(LyricsDisplaySettings.visualizerEnabled)
+                    .build()
+            )
+            .build()
+
         @Suppress("DEPRECATION")
         return ListTemplate.Builder()
             .setTitle("Menu")
@@ -44,6 +57,7 @@ class LyricsMenuScreen(carContext: CarContext) : Screen(carContext) {
             .setSingleList(
                 ItemList.Builder()
                     .addItem(lightModeRow)
+                    .addItem(visualizerRow)
                     .addItem(resetRow)
                     .build()
             )

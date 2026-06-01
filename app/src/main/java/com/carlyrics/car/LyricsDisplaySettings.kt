@@ -10,14 +10,27 @@ object LyricsDisplaySettings {
     var lightMode: Boolean = false
         private set
 
+    @Volatile
+    var visualizerEnabled: Boolean = true
+        private set
+
     fun setLightMode(enabled: Boolean) {
         if (lightMode == enabled) return
         lightMode = enabled
         notifyChanged()
     }
 
+    fun setVisualizerEnabled(enabled: Boolean) {
+        if (visualizerEnabled == enabled) return
+        visualizerEnabled = enabled
+        notifyChanged()
+    }
+
     fun reset() {
-        setLightMode(false)
+        val changed = lightMode || !visualizerEnabled
+        lightMode = false
+        visualizerEnabled = true
+        if (changed) notifyChanged()
     }
 
     fun observe(listener: Listener) {
