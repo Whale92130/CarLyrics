@@ -126,18 +126,18 @@ class LyricsSurfaceCallback : SurfaceCallback {
 
     private fun drawSongHeader(canvas: Canvas, area: Rect, track: TrackInfo) {
         val maxWidth = (area.width() - HEADER_HORIZONTAL_MARGIN * 2f).coerceAtLeast(1f)
-        val cx = area.exactCenterX()
+        val left = area.left + HEADER_HORIZONTAL_MARGIN
         val title = ellipsize(track.title, META_TITLE_PAINT, maxWidth)
         val artist = track.artist
             ?.takeIf { it.isNotBlank() }
             ?.let { ellipsize(it, META_ARTIST_PAINT, maxWidth) }
 
         var baseline = area.top + HEADER_TOP_MARGIN - META_TITLE_PAINT.ascent()
-        canvas.drawText(title, cx, baseline, META_TITLE_PAINT)
+        canvas.drawText(title, left, baseline, META_TITLE_PAINT)
 
         if (artist != null) {
             baseline += lineHeight(META_TITLE_PAINT) + HEADER_LINE_GAP
-            canvas.drawText(artist, cx, baseline, META_ARTIST_PAINT)
+            canvas.drawText(artist, left, baseline, META_ARTIST_PAINT)
         }
     }
 
@@ -294,8 +294,8 @@ class LyricsSurfaceCallback : SurfaceCallback {
         private const val MIN_TITLE_TEXT_SIZE = 34f
         private const val TEXT_SIZE_STEP = 2f
         private const val LINE_SPACING_MULTIPLIER = 1.08f
-        private const val HEADER_TOP_MARGIN = 14f
-        private const val HEADER_HORIZONTAL_MARGIN = 48f
+        private const val HEADER_TOP_MARGIN = 18f
+        private const val HEADER_HORIZONTAL_MARGIN = 36f
         private const val HEADER_LINE_GAP = 0f
         private const val ELLIPSIS = "..."
 
@@ -310,8 +310,8 @@ class LyricsSurfaceCallback : SurfaceCallback {
 
         private val META_TITLE_PAINT = Paint().apply {
             color = Color.WHITE
-            textSize = 30f
-            textAlign = Paint.Align.CENTER
+            textSize = 24f
+            textAlign = Paint.Align.LEFT
             isAntiAlias = true
             isFakeBoldText = true
             setShadowLayer(6f, 0f, 2f, Color.BLACK)
@@ -319,8 +319,8 @@ class LyricsSurfaceCallback : SurfaceCallback {
 
         private val META_ARTIST_PAINT = Paint().apply {
             color = 0xFFB8B8B8.toInt()
-            textSize = 24f
-            textAlign = Paint.Align.CENTER
+            textSize = 20f
+            textAlign = Paint.Align.LEFT
             isAntiAlias = true
             setShadowLayer(6f, 0f, 2f, Color.BLACK)
         }

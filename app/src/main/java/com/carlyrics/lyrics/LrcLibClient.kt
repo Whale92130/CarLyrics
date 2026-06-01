@@ -53,30 +53,48 @@ class LrcLibClient(
     }
 
     private fun search(query: LyricsQuery): JSONObject? {
-        val params = mutableMapOf<String, String?>(
-            "track_name" to query.trackName,
-            "artist_name" to query.artistName,
-            "album_name" to query.albumName,
-            "duration" to query.durationSeconds?.toString()
+        val searchAttempts = listOf(
+            mapOf(
+                "track_name" to query.trackName,
+                "artist_name" to query.artistName
+            ),
+            mapOf(
+                "q" to listOfNotNull(query.trackName, query.artistName)
+                    .joinToString(" ")
+            ),
+            mapOf(
+                "track_name" to query.trackName
+            ),
+            mapOf(
+                "q" to query.trackName
+            )
         )
 
-        if (query.artistName.isNullOrBlank()) {
-            params["q"] = query.trackName
-        }
-
-        val array = requestArray(
-            "/api/search",
-            params
-        )
-
-        val candidates = (0 until array.length())
-            .mapNotNull { index -> array.optJSONObject(index) }
+        return searchAttempts
+            .asSequence()
+            .map { params -> requestArray("/api/search", params) }
+            .flatMap { array ->
+                (0 until array.length())
+                    .asSequence()
+                    .mapNotNull { index -> array.optJSONObject(index) }
+            }
             .filter { record -> record.hasUsableLyrics() }
+            .distinctBy { record ->
+                record.optLong("id", -1L).takeIf { it >= 0L }
+                    ?: listOf(
+                        normalize(record.optNullableString("trackName", "track_name", "name")),
+                        normalize(record.optNullableString("artistName", "artist_name")),
+                        record.optDurationSeconds()?.toString().orEmpty()
+                    ).joinToString("|")
+            }
             .map { record -> record to score(record, query) }
             .filter { (_, score) -> score >= minimumScore(query) }
-
-        return candidates.maxByOrNull { (_, score) -> score }?.first
+            .maxByOrNull { (_, score) -> score }
+            ?.first
     }
+
+    private fun minimumScore(query: LyricsQuery): Int =
+        if (query.artistName.isNullOrBlank()) 40 else 45
 
     private fun score(record: JSONObject, query: LyricsQuery): Int {
         var score = 0
@@ -123,9 +141,6 @@ class LrcLibClient(
 
         return score
     }
-
-    private fun minimumScore(query: LyricsQuery): Int =
-        if (query.artistName.isNullOrBlank()) 40 else 60
 
     private fun JSONObject.toLyricsState(): LyricsState {
         if (optBoolean("instrumental", false)) return LyricsState.Instrumental
