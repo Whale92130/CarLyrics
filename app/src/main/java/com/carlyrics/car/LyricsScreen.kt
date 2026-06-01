@@ -6,10 +6,13 @@ import androidx.car.app.Screen
 import androidx.car.app.ScreenManager
 import androidx.car.app.model.Action
 import androidx.car.app.model.ActionStrip
+import androidx.car.app.model.CarIcon
 import androidx.car.app.model.Template
 import androidx.car.app.navigation.model.NavigationTemplate
+import androidx.core.graphics.drawable.IconCompat
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
+import com.carlyrics.R
 
 /**
  * Car-side screen for the map surface. The template intentionally has no pane or
@@ -34,7 +37,14 @@ class LyricsScreen(carContext: CarContext) : Screen(carContext) {
                 ActionStrip.Builder()
                     .addAction(
                         Action.Builder()
-                            .setTitle("Menu")
+                            .setIcon(
+                                CarIcon.Builder(
+                                    IconCompat.createWithResource(
+                                        carContext,
+                                        R.drawable.ic_more_vert
+                                    )
+                                ).build()
+                            )
                             .setOnClickListener {
                                 carContext.getCarService(ScreenManager::class.java)
                                     .push(LyricsMenuScreen(carContext))
