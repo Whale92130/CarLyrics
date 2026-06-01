@@ -23,12 +23,7 @@ class LrcLibClient(
         if (query.trackName.isBlank()) return LyricsState.NotFound
 
         return try {
-            val exactResult = fetchByExactMetadata(query)?.toLyricsState()
-            if (exactResult != null && exactResult != LyricsState.NotFound) {
-                exactResult
-            } else {
-                search(query)?.toLyricsState() ?: LyricsState.NotFound
-            }
+            findLyrics(query)
         } catch (e: IOException) {
             LyricsState.Error("Network error")
         } catch (e: RuntimeException) {
@@ -36,20 +31,35 @@ class LrcLibClient(
         }
     }
 
-    private fun fetchByExactMetadata(query: LyricsQuery): JSONObject? {
-        if (query.artistName.isNullOrBlank()) return null
-        if (query.albumName.isNullOrBlank()) return null
-        val duration = query.durationSeconds ?: return null
+    private fun findLyrics(query: LyricsQuery): LyricsState {
+        for (record in directGetAttempts(query)) {
+            if (!isCompatibleCandidate(record, query)) continue
+            val state = record.toLyricsState()
+            if (state != LyricsState.NotFound) return state
+        }
+        return search(query)?.toLyricsState() ?: LyricsState.NotFound
+    }
 
-        return requestObjectOrNull(
-            "/api/get",
+    private fun directGetAttempts(query: LyricsQuery): Sequence<JSONObject> = sequence {
+        if (query.artistName.isNullOrBlank()) return@sequence
+
+        val strictParams = if (!query.albumName.isNullOrBlank() && query.durationSeconds != null) {
             mapOf(
                 "track_name" to query.trackName,
                 "artist_name" to query.artistName,
                 "album_name" to query.albumName,
-                "duration" to duration.toString()
+                "duration" to query.durationSeconds.toString()
             )
+        } else null
+
+        val looseParams = mapOf(
+            "track_name" to query.trackName,
+            "artist_name" to query.artistName
         )
+
+        for (params in listOfNotNull(strictParams, looseParams).distinct()) {
+            requestObjectOrNull("/api/get", params)?.let { yield(it) }
+        }
     }
 
     private fun search(query: LyricsQuery): JSONObject? {
@@ -217,14 +227,14 @@ class LrcLibClient(
 
     private fun requestObjectOrNull(path: String, params: Map<String, String?>): JSONObject? {
         val response = request(path, params)
-        if (response.statusCode == HttpURLConnection.HTTP_NOT_FOUND) return null
+        if (response.statusCode in 400..499) return null
         response.requireSuccess()
         return JSONObject(response.body)
     }
 
     private fun requestArray(path: String, params: Map<String, String?>): JSONArray {
         val response = request(path, params)
-        if (response.statusCode == HttpURLConnection.HTTP_NOT_FOUND) return JSONArray()
+        if (response.statusCode in 400..499) return JSONArray()
         response.requireSuccess()
         return JSONArray(response.body)
     }
@@ -306,12 +316,17 @@ class LrcLibClient(
         private const val USER_AGENT = "CarLyrics/1.0 Android"
         private const val AMBIGUOUS_TITLE_DURATION_TOLERANCE_SECONDS = 2L
         private val TIMESTAMP_REGEX = Regex("\\[(\\d{1,3}):(\\d{2})(?:[.:](\\d{1,3}))?]")
+        private val APOSTROPHE_REGEX = Regex("['’‘`ʼ]")
+        private val NON_ALPHANUMERIC_REGEX = Regex("[^\\p{L}\\p{N}\\s]+")
 
         private fun normalize(value: String?): String =
             value
                 ?.trim()
                 ?.lowercase()
+                ?.replace(APOSTROPHE_REGEX, "")
+                ?.replace(NON_ALPHANUMERIC_REGEX, " ")
                 ?.replace(Regex("\\s+"), " ")
+                ?.trim()
                 .orEmpty()
 
         private fun isAmbiguousTitle(value: String): Boolean =
