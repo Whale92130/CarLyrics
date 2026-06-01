@@ -13,19 +13,21 @@ import androidx.car.app.SurfaceContainer
 import com.carlyrics.lyrics.LyricsState
 import com.carlyrics.media.MediaState
 import com.carlyrics.media.TrackInfo
+import kotlin.math.max
 import kotlin.math.roundToInt
 
 /**
  * Draws the current LRCLIB lyric line onto the
  * [NavigationTemplate][androidx.car.app.navigation.model.NavigationTemplate] map surface.
  *
- * The centered text path intentionally mirrors the original title/artist renderer:
- * one large centered line with an optional smaller line beneath it.
+ * The text is wrapped and dynamically sized so the current lyric line stays large
+ * without being clipped by the surface edges.
  */
 class LyricsSurfaceCallback : SurfaceCallback {
 
     private var surfaceContainer: SurfaceContainer? = null
     private var visibleArea: Rect? = null
+    private var stableArea: Rect? = null
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val ticker = object : Runnable {
@@ -55,6 +57,7 @@ class LyricsSurfaceCallback : SurfaceCallback {
     }
 
     override fun onStableAreaChanged(stableArea: Rect) {
+        this.stableArea = stableArea
         render()
     }
 
@@ -63,6 +66,7 @@ class LyricsSurfaceCallback : SurfaceCallback {
         mainHandler.removeCallbacks(ticker)
         this.surfaceContainer = null
         this.visibleArea = null
+        this.stableArea = null
     }
 
     private fun render() {
@@ -83,8 +87,7 @@ class LyricsSurfaceCallback : SurfaceCallback {
             val track = MediaState.current
             canvas.drawColor(BACKGROUND_COLOR)
             val area = drawableArea(canvas, container)
-            drawCenteredBlock(canvas, area, track)
-            drawSongInfo(canvas, area, track)
+            drawCenteredLyrics(canvas, area, track)
             Log.d(
                 TAG,
                 "render canvas=${canvas.width}x${canvas.height} area=$area track=$track"
@@ -96,90 +99,70 @@ class LyricsSurfaceCallback : SurfaceCallback {
 
     private fun drawableArea(canvas: Canvas, container: SurfaceContainer): Rect {
         val visible = visibleArea
-        if (visible != null && visible.width() > 0 && visible.height() > 0) {
-            return visible
-        }
-
-        if (canvas.width > 0 && canvas.height > 0) {
-            return Rect(0, 0, canvas.width, canvas.height)
-        }
-
-        val clip = Rect()
-        if (canvas.getClipBounds(clip) && clip.width() > 0 && clip.height() > 0) {
-            return clip
-        }
-
-        return Rect(0, 0, container.width.coerceAtLeast(1), container.height.coerceAtLeast(1))
-    }
-
-    private fun drawCenteredBlock(canvas: Canvas, area: Rect, track: TrackInfo?) {
-        val cx = area.exactCenterX()
-        val maxWidth = (area.width() - HORIZONTAL_MARGIN * 2f).coerceAtLeast(1f)
-
-        val primary: String
-        val secondary: String?
-
-        if (track == null) {
-            primary = "No song playing"
-            secondary = null
+        val base = if (visible != null && visible.width() > 0 && visible.height() > 0) {
+            Rect(visible)
+        } else if (canvas.width > 0 && canvas.height > 0) {
+            Rect(0, 0, canvas.width, canvas.height)
         } else {
-            val display = lyricDisplay(track)
-            primary = display.primary
-            secondary = display.secondary
+            val clip = Rect()
+            if (canvas.getClipBounds(clip) && clip.width() > 0 && clip.height() > 0) {
+                clip
+            } else {
+                Rect(0, 0, container.width.coerceAtLeast(1), container.height.coerceAtLeast(1))
+            }
         }
 
-        val primaryText = ellipsize(primary, TITLE_PAINT, maxWidth)
-        val secondaryText = secondary
-            ?.takeIf { it.isNotBlank() }
-            ?.let { ellipsize(it, ARTIST_PAINT, maxWidth) }
+        val stable = stableArea
+        if (stable != null && stable.width() > 0 && stable.height() > 0) {
+            val intersected = Rect(base)
+            if (intersected.intersect(stable)) return intersected
+        }
 
-        val titleHeight = TITLE_PAINT.descent() - TITLE_PAINT.ascent()
-        val artistHeight = ARTIST_PAINT.descent() - ARTIST_PAINT.ascent()
-        val totalHeight = titleHeight + if (secondaryText != null) GAP + artistHeight else 0f
+        return base
+    }
 
-        val blockTop = area.exactCenterY() - totalHeight / 2f
-        val titleBaseline = blockTop - TITLE_PAINT.ascent()
-        canvas.drawText(primaryText, cx, titleBaseline, TITLE_PAINT)
+    private fun drawCenteredLyrics(canvas: Canvas, area: Rect, track: TrackInfo?) {
+        val text = if (track == null) {
+            "No song playing"
+        } else {
+            lyricDisplay(track)
+        }
 
-        if (secondaryText != null) {
-            val artistBaseline = titleBaseline + TITLE_PAINT.descent() + GAP - ARTIST_PAINT.ascent()
-            canvas.drawText(secondaryText, cx, artistBaseline, ARTIST_PAINT)
+        val textArea = Rect(area)
+        val horizontalMargin = (area.width() * HORIZONTAL_MARGIN_RATIO)
+            .coerceIn(MIN_HORIZONTAL_MARGIN, MAX_HORIZONTAL_MARGIN)
+            .roundToInt()
+        val verticalMargin = (area.height() * VERTICAL_MARGIN_RATIO)
+            .coerceIn(MIN_VERTICAL_MARGIN, MAX_VERTICAL_MARGIN)
+            .roundToInt()
+        textArea.inset(horizontalMargin, verticalMargin)
+        if (textArea.width() <= 0 || textArea.height() <= 0) return
+
+        val layout = fitText(text, TITLE_PAINT, textArea.width().toFloat(), textArea.height().toFloat())
+        val lineHeight = lineHeight(TITLE_PAINT)
+        val totalHeight = lineHeight * layout.size
+        var baseline = textArea.exactCenterY() - totalHeight / 2f - TITLE_PAINT.ascent()
+
+        for (line in layout) {
+            canvas.drawText(line, textArea.exactCenterX(), baseline, TITLE_PAINT)
+            baseline += lineHeight
         }
     }
 
-    private fun drawSongInfo(canvas: Canvas, area: Rect, track: TrackInfo?) {
-        if (track == null) return
-
-        val maxWidth = (area.width() - HORIZONTAL_MARGIN * 2f).coerceAtLeast(1f)
-        val title = ellipsize(track.title, META_TITLE_PAINT, maxWidth)
-        val artist = track.artist?.let { ellipsize(it, META_ARTIST_PAINT, maxWidth) }
-        val left = area.left + HORIZONTAL_MARGIN
-        val titleBaseline = area.top + META_TOP_MARGIN - META_TITLE_PAINT.ascent()
-
-        canvas.drawText(title, left, titleBaseline, META_TITLE_PAINT)
-        if (!artist.isNullOrBlank()) {
-            val artistBaseline = titleBaseline + META_TITLE_PAINT.descent() + META_GAP -
-                META_ARTIST_PAINT.ascent()
-            canvas.drawText(artist, left, artistBaseline, META_ARTIST_PAINT)
-        }
-    }
-
-    private fun lyricDisplay(track: TrackInfo): LyricDisplay =
+    private fun lyricDisplay(track: TrackInfo): String =
         when (val lyrics = track.lyrics) {
-            LyricsState.Loading -> LyricDisplay("Finding lyrics...", null)
-            LyricsState.Instrumental -> LyricDisplay("Instrumental", null)
-            LyricsState.NotFound -> LyricDisplay("Lyrics not found", null)
-            is LyricsState.Error -> LyricDisplay("Lyrics unavailable", null)
+            LyricsState.Loading -> "Finding lyrics..."
+            LyricsState.Instrumental -> "Instrumental"
+            LyricsState.NotFound -> "Lyrics not found"
+            is LyricsState.Error -> "Lyrics unavailable"
             is LyricsState.Found -> lyricDisplay(track, lyrics)
         }
 
-    private fun lyricDisplay(track: TrackInfo, lyrics: LyricsState.Found): LyricDisplay {
-        if (lyrics.lines.isEmpty()) return LyricDisplay("Lyrics not found", null)
+    private fun lyricDisplay(track: TrackInfo, lyrics: LyricsState.Found): String {
+        if (lyrics.lines.isEmpty()) return "Lyrics not found"
 
         val index = currentLyricIndex(track, lyrics)
-        val primary = lyrics.lines[index].text
-        val secondary = lyrics.lines.getOrNull(index + 1)?.text
-        return LyricDisplay(primary, secondary)
+        return lyrics.lines[index].text
     }
 
     private fun currentLyricIndex(track: TrackInfo, lyrics: LyricsState.Found): Int {
@@ -207,59 +190,88 @@ class LyricsSurfaceCallback : SurfaceCallback {
         mainHandler.postDelayed(ticker, TICK_MILLIS)
     }
 
-    private fun ellipsize(text: String, paint: Paint, maxWidth: Float): String {
-        if (paint.measureText(text) <= maxWidth) return text
+    private fun fitText(
+        text: String,
+        paint: Paint,
+        maxWidth: Float,
+        maxHeight: Float
+    ): List<String> {
+        var size = MAX_TITLE_TEXT_SIZE
+        while (size > MIN_TITLE_TEXT_SIZE) {
+            paint.textSize = size
+            val lines = wrapText(text, paint, maxWidth)
+            if (lineHeight(paint) * lines.size <= maxHeight) return lines
+            size -= TEXT_SIZE_STEP
+        }
 
-        val available = maxWidth - paint.measureText(ELLIPSIS)
-        if (available <= 0f) return ELLIPSIS
-
-        val count = paint.breakText(text, true, available, null)
-        return text.take(count).trimEnd() + ELLIPSIS
+        paint.textSize = MIN_TITLE_TEXT_SIZE
+        return wrapText(text, paint, maxWidth)
     }
 
-    private data class LyricDisplay(
-        val primary: String,
-        val secondary: String?
-    )
+    private fun wrapText(text: String, paint: Paint, maxWidth: Float): List<String> {
+        val words = text.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+        if (words.isEmpty()) return listOf("")
+
+        val lines = mutableListOf<String>()
+        var current = ""
+        for (word in words) {
+            val candidate = if (current.isBlank()) word else "$current $word"
+            if (paint.measureText(candidate) <= maxWidth) {
+                current = candidate
+            } else {
+                if (current.isNotBlank()) lines += current
+                if (paint.measureText(word) <= maxWidth) {
+                    current = word
+                } else {
+                    val broken = breakLongWord(word, paint, maxWidth)
+                    lines.addAll(broken.dropLast(1))
+                    current = broken.lastOrNull().orEmpty()
+                }
+            }
+        }
+
+        if (current.isNotBlank()) lines += current
+        return lines
+    }
+
+    private fun breakLongWord(word: String, paint: Paint, maxWidth: Float): List<String> {
+        val parts = mutableListOf<String>()
+        var remaining = word
+        while (remaining.isNotEmpty()) {
+            val count = max(1, paint.breakText(remaining, true, maxWidth, null))
+            parts += remaining.take(count)
+            remaining = remaining.drop(count)
+        }
+        return parts
+    }
+
+    private fun lineHeight(paint: Paint): Float {
+        val metrics = paint.fontMetrics
+        return (metrics.descent - metrics.ascent) * LINE_SPACING_MULTIPLIER
+    }
 
     companion object {
         private const val TAG = "LyricsSurfaceCallback"
         private const val BACKGROUND_COLOR = 0xFF0A0A0A.toInt()
-        private const val HORIZONTAL_MARGIN = 48f
-        private const val META_TOP_MARGIN = 24f
-        private const val META_GAP = 4f
-        private const val GAP = 16f
         private const val TICK_MILLIS = 350L
-        private const val ELLIPSIS = "..."
+        private const val HORIZONTAL_MARGIN_RATIO = 0.08f
+        private const val VERTICAL_MARGIN_RATIO = 0.12f
+        private const val MIN_HORIZONTAL_MARGIN = 36f
+        private const val MAX_HORIZONTAL_MARGIN = 88f
+        private const val MIN_VERTICAL_MARGIN = 28f
+        private const val MAX_VERTICAL_MARGIN = 80f
+        private const val MAX_TITLE_TEXT_SIZE = 96f
+        private const val MIN_TITLE_TEXT_SIZE = 34f
+        private const val TEXT_SIZE_STEP = 2f
+        private const val LINE_SPACING_MULTIPLIER = 1.08f
 
         private val TITLE_PAINT = Paint().apply {
             color = Color.WHITE
-            textSize = 56f
+            textSize = MAX_TITLE_TEXT_SIZE
             textAlign = Paint.Align.CENTER
             isAntiAlias = true
             isFakeBoldText = true
-        }
-
-        private val ARTIST_PAINT = Paint().apply {
-            color = 0xFFBBBBBB.toInt()
-            textSize = 36f
-            textAlign = Paint.Align.CENTER
-            isAntiAlias = true
-        }
-
-        private val META_TITLE_PAINT = Paint().apply {
-            color = Color.WHITE
-            textSize = 26f
-            textAlign = Paint.Align.LEFT
-            isAntiAlias = true
-            isFakeBoldText = true
-        }
-
-        private val META_ARTIST_PAINT = Paint().apply {
-            color = 0xFFB8B8B8.toInt()
-            textSize = 22f
-            textAlign = Paint.Align.LEFT
-            isAntiAlias = true
+            setShadowLayer(8f, 0f, 2f, Color.BLACK)
         }
     }
 }
