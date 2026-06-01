@@ -2,8 +2,8 @@ package com.carlyrics.car
 
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.LinearGradient
 import android.graphics.Paint
+import android.graphics.RadialGradient
 import android.graphics.Rect
 import android.graphics.Shader
 import android.os.Handler
@@ -140,7 +140,6 @@ class LyricsSurfaceCallback : SurfaceCallback {
             .joinToString(" - ")
         val text = ellipsize(label, META_PAINT, maxWidth)
         val baseline = area.bottom - FOOTER_BOTTOM_MARGIN - META_PAINT.descent()
-        META_PAINT.shader = textGradient(track.albumColors, area)
         canvas.drawText(text, area.exactCenterX(), baseline, META_PAINT)
     }
 
@@ -171,6 +170,7 @@ class LyricsSurfaceCallback : SurfaceCallback {
             canvas.drawText(line, textArea.exactCenterX(), baseline, TITLE_PAINT)
             baseline += lineHeight
         }
+        TITLE_PAINT.shader = null
     }
 
     private fun lyricDisplay(track: TrackInfo): String =
@@ -317,36 +317,44 @@ class LyricsSurfaceCallback : SurfaceCallback {
     }
 
     private fun textGradient(colors: List<Int>?, area: Rect): Shader? {
-        val gradientColors = colors
+        val tint = colors
             ?.takeIf { it.isNotEmpty() }
-            ?.map { brightenForText(it) }
-            ?.take(MAX_GRADIENT_COLORS)
-            ?.toIntArray()
+            ?.first()
+            ?.let { subtleTextColor(it) }
             ?: return null
 
-        if (gradientColors.size == 1) return null
+        val base = baseTextColor()
+        val radius = area.width().coerceAtLeast(area.height()) * 0.65f
 
-        return LinearGradient(
-            area.left.toFloat(),
+        return RadialGradient(
+            area.exactCenterX(),
             area.exactCenterY(),
-            area.right.toFloat(),
-            area.exactCenterY(),
-            gradientColors,
-            null,
+            radius,
+            intArrayOf(tint, base, tint),
+            floatArrayOf(0f, 0.58f, 1f),
             Shader.TileMode.CLAMP
         )
     }
 
-    private fun brightenForText(color: Int): Int {
-        val hsv = FloatArray(3)
-        Color.colorToHSV(color, hsv)
-        hsv[1] = hsv[1].coerceAtLeast(0.45f)
-        hsv[2] = if (LyricsDisplaySettings.lightMode) {
-            hsv[2].coerceIn(0.35f, 0.72f)
-        } else {
-            hsv[2].coerceAtLeast(0.82f)
-        }
-        return Color.HSVToColor(hsv)
+    private fun subtleTextColor(color: Int): Int =
+        blend(baseTextColor(), color, ALBUM_TEXT_TINT_WEIGHT)
+
+    private fun baseTextColor(): Int =
+        if (LyricsDisplaySettings.lightMode) Color.BLACK else Color.WHITE
+
+    private fun blend(base: Int, accent: Int, accentWeight: Float): Int {
+        val baseWeight = 1f - accentWeight
+        return Color.rgb(
+            (Color.red(base) * baseWeight + Color.red(accent) * accentWeight)
+                .roundToInt()
+                .coerceIn(0, 255),
+            (Color.green(base) * baseWeight + Color.green(accent) * accentWeight)
+                .roundToInt()
+                .coerceIn(0, 255),
+            (Color.blue(base) * baseWeight + Color.blue(accent) * accentWeight)
+                .roundToInt()
+                .coerceIn(0, 255)
+        )
     }
 
     companion object {
@@ -367,7 +375,7 @@ class LyricsSurfaceCallback : SurfaceCallback {
         private const val FOOTER_BOTTOM_MARGIN = 18f
         private const val FOOTER_HORIZONTAL_MARGIN = 48f
         private const val ELLIPSIS = "..."
-        private const val MAX_GRADIENT_COLORS = 5
+        private const val ALBUM_TEXT_TINT_WEIGHT = 0.18f
 
         private val TITLE_PAINT = Paint().apply {
             color = Color.WHITE
