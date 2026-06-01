@@ -375,7 +375,7 @@ class LyricsSurfaceCallback : SurfaceCallback {
         private const val FOOTER_BOTTOM_MARGIN = 18f
         private const val FOOTER_HORIZONTAL_MARGIN = 48f
         private const val ELLIPSIS = "..."
-        private const val ALBUM_TEXT_TINT_WEIGHT = 0.18f
+        private const val ALBUM_TEXT_TINT_WEIGHT = 0.30f
 
         private val TITLE_PAINT = Paint().apply {
             color = Color.WHITE
