@@ -2,10 +2,9 @@ package com.carlyrics.car
 
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.LinearGradient
 import android.graphics.Paint
-import android.graphics.RadialGradient
 import android.graphics.Rect
-import android.graphics.RectF
 import android.graphics.Shader
 import android.os.Handler
 import android.os.Looper
@@ -16,10 +15,8 @@ import androidx.car.app.SurfaceContainer
 import com.carlyrics.lyrics.LyricsState
 import com.carlyrics.media.MediaState
 import com.carlyrics.media.TrackInfo
-import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.roundToInt
-import kotlin.math.sin
 
 /**
  * Draws the current LRCLIB lyric line onto the
@@ -50,7 +47,6 @@ class LyricsSurfaceCallback : SurfaceCallback {
     private val settingsListener = LyricsDisplaySettings.Listener {
         mainHandler.post {
             render()
-            updateTicker()
         }
     }
 
@@ -99,13 +95,8 @@ class LyricsSurfaceCallback : SurfaceCallback {
         try {
             val track = MediaState.current
             val area = drawableArea(canvas, container)
-            val visualizerActive = shouldDrawVisualizer(track)
-            configurePaints(visualizerActive)
-            if (visualizerActive) {
-                drawAudioBackground(canvas, area, track!!)
-            } else {
-                canvas.drawColor(backgroundColor())
-            }
+            configurePaints()
+            canvas.drawColor(backgroundColor())
             drawCenteredLyrics(canvas, area, track)
             if (track != null) {
                 drawSongFooter(canvas, area, track)
@@ -149,57 +140,8 @@ class LyricsSurfaceCallback : SurfaceCallback {
             .joinToString(" - ")
         val text = ellipsize(label, META_PAINT, maxWidth)
         val baseline = area.bottom - FOOTER_BOTTOM_MARGIN - META_PAINT.descent()
+        META_PAINT.shader = textGradient(track.albumColors, area)
         canvas.drawText(text, area.exactCenterX(), baseline, META_PAINT)
-    }
-
-    private fun drawAudioBackground(canvas: Canvas, area: Rect, track: TrackInfo) {
-        val colors = track.albumColors.takeIf { it.isNotEmpty() } ?: FALLBACK_ALBUM_COLORS
-        val position = track.estimatedPositionMillis(SystemClock.elapsedRealtime())
-            ?: track.playbackPositionMillis
-            ?: 0L
-        val phase = position / 620f
-
-        canvas.drawColor(darken(colors.first(), 0.18f))
-
-        VISUALIZER_PAINT.style = Paint.Style.FILL
-        colors.forEachIndexed { index, color ->
-            val offset = index * 1.35f
-            val pulse = ((sin((phase + offset).toDouble()) + 1.0) / 2.0).toFloat()
-            val orbit = phase * 0.18f + offset
-            val cx = area.exactCenterX() + cos(orbit.toDouble()).toFloat() * area.width() * 0.22f
-            val cy = area.exactCenterY() +
-                sin((orbit * 0.9f).toDouble()).toFloat() * area.height() * 0.18f
-            val radius = area.width().coerceAtLeast(area.height()) *
-                (0.32f + pulse * 0.22f)
-
-            VISUALIZER_PAINT.shader = RadialGradient(
-                cx,
-                cy,
-                radius,
-                withAlpha(brighten(color, 1.35f), 155),
-                Color.TRANSPARENT,
-                Shader.TileMode.CLAMP
-            )
-            canvas.drawCircle(cx, cy, radius, VISUALIZER_PAINT)
-        }
-        VISUALIZER_PAINT.shader = null
-
-        val barCount = 28
-        val gap = area.width() * 0.006f
-        val barWidth = ((area.width() - gap * (barCount - 1)) / barCount).coerceAtLeast(2f)
-        val bottom = area.bottom.toFloat()
-        val maxHeight = area.height() * 0.24f
-        for (i in 0 until barCount) {
-            val color = colors[i % colors.size]
-            val wave = ((sin((phase * 1.8f + i * 0.55f).toDouble()) + 1.0) / 2.0).toFloat()
-            val height = area.height() * 0.045f + wave * maxHeight
-            val left = area.left + i * (barWidth + gap)
-            val rect = RectF(left, bottom - height, left + barWidth, bottom)
-            VISUALIZER_PAINT.color = withAlpha(brighten(color, 1.2f), 72)
-            canvas.drawRoundRect(rect, barWidth / 2f, barWidth / 2f, VISUALIZER_PAINT)
-        }
-
-        canvas.drawColor(VISUALIZER_SCRIM_COLOR)
     }
 
     private fun drawCenteredLyrics(canvas: Canvas, area: Rect, track: TrackInfo?) {
@@ -220,6 +162,7 @@ class LyricsSurfaceCallback : SurfaceCallback {
         if (textArea.width() <= 0 || textArea.height() <= 0) return
 
         val layout = fitText(text, TITLE_PAINT, textArea.width().toFloat(), textArea.height().toFloat())
+        TITLE_PAINT.shader = textGradient(track?.albumColors, textArea)
         val lineHeight = lineHeight(TITLE_PAINT)
         val totalHeight = lineHeight * layout.size
         var baseline = textArea.exactCenterY() - totalHeight / 2f - TITLE_PAINT.ascent()
@@ -269,8 +212,7 @@ class LyricsSurfaceCallback : SurfaceCallback {
 
         val lyrics = track.lyrics as? LyricsState.Found
         val shouldTickLyrics = lyrics?.synced == true
-        val shouldTickVisualizer = LyricsDisplaySettings.visualizerEnabled
-        if (!shouldTickLyrics && !shouldTickVisualizer) return
+        if (!shouldTickLyrics) return
 
         mainHandler.postDelayed(ticker, TICK_MILLIS)
     }
@@ -348,53 +290,64 @@ class LyricsSurfaceCallback : SurfaceCallback {
     private fun backgroundColor(): Int =
         if (LyricsDisplaySettings.lightMode) LIGHT_BACKGROUND_COLOR else DARK_BACKGROUND_COLOR
 
-    private fun shouldDrawVisualizer(track: TrackInfo?): Boolean =
-        track != null &&
-            LyricsDisplaySettings.visualizerEnabled
-
-    private fun configurePaints(visualizerActive: Boolean) {
-        if (LyricsDisplaySettings.lightMode && !visualizerActive) {
+    private fun configurePaints() {
+        if (LyricsDisplaySettings.lightMode) {
             TITLE_PAINT.apply {
                 color = Color.BLACK
+                shader = null
                 clearShadowLayer()
             }
             META_PAINT.apply {
                 color = Color.BLACK
+                shader = null
                 clearShadowLayer()
             }
         } else {
             TITLE_PAINT.apply {
                 color = Color.WHITE
+                shader = null
                 setShadowLayer(8f, 0f, 2f, Color.BLACK)
             }
             META_PAINT.apply {
                 color = Color.WHITE
+                shader = null
                 setShadowLayer(6f, 0f, 2f, Color.BLACK)
             }
         }
     }
 
-    private fun darken(color: Int, factor: Float): Int =
-        Color.rgb(
-            (Color.red(color) * factor).toInt().coerceIn(0, 255),
-            (Color.green(color) * factor).toInt().coerceIn(0, 255),
-            (Color.blue(color) * factor).toInt().coerceIn(0, 255)
-        )
+    private fun textGradient(colors: List<Int>?, area: Rect): Shader? {
+        val gradientColors = colors
+            ?.takeIf { it.isNotEmpty() }
+            ?.map { brightenForText(it) }
+            ?.take(MAX_GRADIENT_COLORS)
+            ?.toIntArray()
+            ?: return null
 
-    private fun brighten(color: Int, factor: Float): Int =
-        Color.rgb(
-            (Color.red(color) * factor).toInt().coerceIn(0, 255),
-            (Color.green(color) * factor).toInt().coerceIn(0, 255),
-            (Color.blue(color) * factor).toInt().coerceIn(0, 255)
-        )
+        if (gradientColors.size == 1) return null
 
-    private fun withAlpha(color: Int, alpha: Int): Int =
-        Color.argb(
-            alpha.coerceIn(0, 255),
-            Color.red(color),
-            Color.green(color),
-            Color.blue(color)
+        return LinearGradient(
+            area.left.toFloat(),
+            area.exactCenterY(),
+            area.right.toFloat(),
+            area.exactCenterY(),
+            gradientColors,
+            null,
+            Shader.TileMode.CLAMP
         )
+    }
+
+    private fun brightenForText(color: Int): Int {
+        val hsv = FloatArray(3)
+        Color.colorToHSV(color, hsv)
+        hsv[1] = hsv[1].coerceAtLeast(0.45f)
+        hsv[2] = if (LyricsDisplaySettings.lightMode) {
+            hsv[2].coerceIn(0.35f, 0.72f)
+        } else {
+            hsv[2].coerceAtLeast(0.82f)
+        }
+        return Color.HSVToColor(hsv)
+    }
 
     companion object {
         private const val TAG = "LyricsSurfaceCallback"
@@ -414,13 +367,7 @@ class LyricsSurfaceCallback : SurfaceCallback {
         private const val FOOTER_BOTTOM_MARGIN = 18f
         private const val FOOTER_HORIZONTAL_MARGIN = 48f
         private const val ELLIPSIS = "..."
-        private const val VISUALIZER_SCRIM_COLOR = 0x88000000.toInt()
-
-        private val FALLBACK_ALBUM_COLORS = listOf(
-            0xFF3D7EFF.toInt(),
-            0xFFFF4D8D.toInt(),
-            0xFF18D7A1.toInt()
-        )
+        private const val MAX_GRADIENT_COLORS = 5
 
         private val TITLE_PAINT = Paint().apply {
             color = Color.WHITE
@@ -440,8 +387,5 @@ class LyricsSurfaceCallback : SurfaceCallback {
             setShadowLayer(6f, 0f, 2f, Color.BLACK)
         }
 
-        private val VISUALIZER_PAINT = Paint().apply {
-            isAntiAlias = true
-        }
     }
 }
