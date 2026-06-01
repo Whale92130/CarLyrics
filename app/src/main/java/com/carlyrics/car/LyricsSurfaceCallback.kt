@@ -30,6 +30,10 @@ class LyricsSurfaceCallback : SurfaceCallback {
     private var surfaceContainer: SurfaceContainer? = null
     private var visibleArea: Rect? = null
     private var stableArea: Rect? = null
+    private var animatedTrackKey: String? = null
+    private var displayedLyricText: String? = null
+    private var previousLyricText: String? = null
+    private var lyricTransitionStartedAtElapsedMillis: Long = 0L
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val ticker = object : Runnable {
@@ -76,6 +80,7 @@ class LyricsSurfaceCallback : SurfaceCallback {
         this.surfaceContainer = null
         this.visibleArea = null
         this.stableArea = null
+        resetLyricTransition()
     }
 
     private fun render() {
@@ -138,18 +143,105 @@ class LyricsSurfaceCallback : SurfaceCallback {
         val maxWidth = (area.width() - FOOTER_HORIZONTAL_MARGIN * 2f).coerceAtLeast(1f)
         val label = listOfNotNull(track.title, track.artist)
             .joinToString(" - ")
-        val text = ellipsize(label, META_PAINT, maxWidth)
+        val iconWidth = if (track.lyricsSavedOnDevice) {
+            DOWNLOAD_ICON_GAP + DOWNLOAD_ICON_SIZE
+        } else {
+            0f
+        }
+        val text = ellipsize(label, META_PAINT, (maxWidth - iconWidth).coerceAtLeast(1f))
+        val textWidth = META_PAINT.measureText(text)
+        val groupWidth = textWidth + iconWidth
+        val textLeft = area.exactCenterX() - groupWidth / 2f
         val baseline = area.bottom - FOOTER_BOTTOM_MARGIN - META_PAINT.descent()
-        canvas.drawText(text, area.exactCenterX(), baseline, META_PAINT)
+
+        val originalAlign = META_PAINT.textAlign
+        META_PAINT.textAlign = Paint.Align.LEFT
+        canvas.drawText(text, textLeft, baseline, META_PAINT)
+        META_PAINT.textAlign = originalAlign
+
+        if (track.lyricsSavedOnDevice) {
+            drawDownloadIcon(canvas, textLeft + textWidth + DOWNLOAD_ICON_GAP, baseline)
+        }
+    }
+
+    private fun drawDownloadIcon(canvas: Canvas, left: Float, textBaseline: Float) {
+        val textTop = textBaseline + META_PAINT.ascent()
+        val textBottom = textBaseline + META_PAINT.descent()
+        val top = textTop + (textBottom - textTop - DOWNLOAD_ICON_SIZE) / 2f
+        val centerX = left + DOWNLOAD_ICON_SIZE / 2f
+        val arrowTop = top + DOWNLOAD_ICON_SIZE * 0.12f
+        val arrowBottom = top + DOWNLOAD_ICON_SIZE * 0.58f
+        val headInset = DOWNLOAD_ICON_SIZE * 0.22f
+        val trayTop = top + DOWNLOAD_ICON_SIZE * 0.78f
+        val trayLeft = left + DOWNLOAD_ICON_SIZE * 0.22f
+        val trayRight = left + DOWNLOAD_ICON_SIZE * 0.78f
+
+        canvas.drawLine(centerX, arrowTop, centerX, arrowBottom, ICON_PAINT)
+        canvas.drawLine(centerX, arrowBottom, centerX - headInset, arrowBottom - headInset, ICON_PAINT)
+        canvas.drawLine(centerX, arrowBottom, centerX + headInset, arrowBottom - headInset, ICON_PAINT)
+        canvas.drawLine(trayLeft, trayTop, trayRight, trayTop, ICON_PAINT)
+        canvas.drawLine(trayLeft, trayTop, trayLeft, trayTop - DOWNLOAD_ICON_SIZE * 0.15f, ICON_PAINT)
+        canvas.drawLine(trayRight, trayTop, trayRight, trayTop - DOWNLOAD_ICON_SIZE * 0.15f, ICON_PAINT)
     }
 
     private fun drawCenteredLyrics(canvas: Canvas, area: Rect, track: TrackInfo?) {
-        val text = if (track == null) {
+        val targetText = if (track == null) {
             "No song playing"
         } else {
             lyricDisplay(track)
         }
+        val now = SystemClock.elapsedRealtime()
+        updateLyricTransition(track?.lookupKey, targetText, now)
 
+        val previousText = previousLyricText
+        val transitionProgress = lyricTransitionProgress(now)
+        if (previousText != null && transitionProgress < 1f) {
+            val eased = easeOutCubic(transitionProgress)
+            val previousAlpha = (1f - transitionProgress * PREVIOUS_LYRIC_FADE_MULTIPLIER)
+                .coerceIn(0f, 1f)
+            val offset = (area.height() * LYRIC_TRANSITION_OFFSET_RATIO)
+                .coerceIn(MIN_LYRIC_TRANSITION_OFFSET, MAX_LYRIC_TRANSITION_OFFSET)
+            drawCenteredText(
+                canvas = canvas,
+                area = area,
+                track = track,
+                text = previousText,
+                alpha = previousAlpha,
+                verticalOffset = -offset * eased,
+                darken = eased * PREVIOUS_LYRIC_DARKEN_WEIGHT
+            )
+            drawCenteredText(
+                canvas = canvas,
+                area = area,
+                track = track,
+                text = targetText,
+                alpha = eased,
+                verticalOffset = offset * (1f - eased),
+                darken = 0f
+            )
+        } else {
+            previousLyricText = null
+            drawCenteredText(
+                canvas = canvas,
+                area = area,
+                track = track,
+                text = targetText,
+                alpha = 1f,
+                verticalOffset = 0f,
+                darken = 0f
+            )
+        }
+    }
+
+    private fun drawCenteredText(
+        canvas: Canvas,
+        area: Rect,
+        track: TrackInfo?,
+        text: String,
+        alpha: Float,
+        verticalOffset: Float,
+        darken: Float
+    ) {
         val textArea = Rect(area)
         val horizontalMargin = (area.width() * HORIZONTAL_MARGIN_RATIO)
             .coerceIn(MIN_HORIZONTAL_MARGIN, MAX_HORIZONTAL_MARGIN)
@@ -161,16 +253,72 @@ class LyricsSurfaceCallback : SurfaceCallback {
         if (textArea.width() <= 0 || textArea.height() <= 0) return
 
         val layout = fitText(text, TITLE_PAINT, textArea.width().toFloat(), textArea.height().toFloat())
-        TITLE_PAINT.shader = textGradient(track?.albumColors, textArea)
+        val originalColor = TITLE_PAINT.color
+        if (darken > 0f) {
+            TITLE_PAINT.shader = null
+            TITLE_PAINT.color = blend(
+                baseTextColor(),
+                Color.BLACK,
+                darken.coerceIn(0f, 1f)
+            )
+        } else {
+            TITLE_PAINT.shader = textGradient(track?.albumColors, textArea)
+        }
+        TITLE_PAINT.alpha = (alpha.coerceIn(0f, 1f) * 255f).roundToInt()
         val lineHeight = lineHeight(TITLE_PAINT)
         val totalHeight = lineHeight * layout.size
-        var baseline = textArea.exactCenterY() - totalHeight / 2f - TITLE_PAINT.ascent()
+        var baseline = textArea.exactCenterY() + verticalOffset - totalHeight / 2f - TITLE_PAINT.ascent()
 
         for (line in layout) {
             canvas.drawText(line, textArea.exactCenterX(), baseline, TITLE_PAINT)
             baseline += lineHeight
         }
+        TITLE_PAINT.alpha = 255
+        TITLE_PAINT.color = originalColor
         TITLE_PAINT.shader = null
+    }
+
+    private fun updateLyricTransition(trackKey: String?, targetText: String, nowElapsedMillis: Long) {
+        if (trackKey != animatedTrackKey) {
+            animatedTrackKey = trackKey
+            displayedLyricText = targetText
+            previousLyricText = null
+            lyricTransitionStartedAtElapsedMillis = 0L
+            return
+        }
+
+        val currentText = displayedLyricText
+        if (currentText == null) {
+            displayedLyricText = targetText
+            return
+        }
+        if (currentText == targetText) return
+
+        previousLyricText = currentText
+        displayedLyricText = targetText
+        lyricTransitionStartedAtElapsedMillis = nowElapsedMillis
+    }
+
+    private fun resetLyricTransition() {
+        animatedTrackKey = null
+        displayedLyricText = null
+        previousLyricText = null
+        lyricTransitionStartedAtElapsedMillis = 0L
+    }
+
+    private fun lyricTransitionProgress(nowElapsedMillis: Long): Float {
+        val previousText = previousLyricText ?: return 1f
+        if (previousText.isEmpty()) return 1f
+        val elapsed = nowElapsedMillis - lyricTransitionStartedAtElapsedMillis
+        return (elapsed.toFloat() / LYRIC_TRANSITION_MILLIS.toFloat()).coerceIn(0f, 1f)
+    }
+
+    private fun isLyricTransitionActive(nowElapsedMillis: Long): Boolean =
+        previousLyricText != null && lyricTransitionProgress(nowElapsedMillis) < 1f
+
+    private fun easeOutCubic(value: Float): Float {
+        val inverse = 1f - value.coerceIn(0f, 1f)
+        return 1f - inverse * inverse * inverse
     }
 
     private fun lyricDisplay(track: TrackInfo): String =
@@ -206,6 +354,12 @@ class LyricsSurfaceCallback : SurfaceCallback {
 
     private fun updateTicker() {
         mainHandler.removeCallbacks(ticker)
+
+        val now = SystemClock.elapsedRealtime()
+        if (isLyricTransitionActive(now)) {
+            mainHandler.postDelayed(ticker, TICK_MILLIS)
+            return
+        }
 
         val track = MediaState.current ?: return
         if (track.playbackSpeed <= 0f) return
@@ -302,6 +456,10 @@ class LyricsSurfaceCallback : SurfaceCallback {
                 shader = null
                 clearShadowLayer()
             }
+            ICON_PAINT.apply {
+                color = Color.BLACK
+                clearShadowLayer()
+            }
         } else {
             TITLE_PAINT.apply {
                 color = Color.WHITE
@@ -311,6 +469,10 @@ class LyricsSurfaceCallback : SurfaceCallback {
             META_PAINT.apply {
                 color = Color.WHITE
                 shader = null
+                setShadowLayer(6f, 0f, 2f, Color.BLACK)
+            }
+            ICON_PAINT.apply {
+                color = Color.WHITE
                 setShadowLayer(6f, 0f, 2f, Color.BLACK)
             }
         }
@@ -361,7 +523,7 @@ class LyricsSurfaceCallback : SurfaceCallback {
         private const val TAG = "LyricsSurfaceCallback"
         private const val DARK_BACKGROUND_COLOR = 0xFF0A0A0A.toInt()
         private const val LIGHT_BACKGROUND_COLOR = Color.WHITE
-        private const val TICK_MILLIS = 350L
+        private const val TICK_MILLIS = 100L
         private const val HORIZONTAL_MARGIN_RATIO = 0.08f
         private const val VERTICAL_MARGIN_RATIO = 0.12f
         private const val MIN_HORIZONTAL_MARGIN = 36f
@@ -372,8 +534,17 @@ class LyricsSurfaceCallback : SurfaceCallback {
         private const val MIN_TITLE_TEXT_SIZE = 34f
         private const val TEXT_SIZE_STEP = 2f
         private const val LINE_SPACING_MULTIPLIER = 1.08f
+        private const val LYRIC_TRANSITION_MILLIS = 700L
+        private const val PREVIOUS_LYRIC_FADE_MULTIPLIER = 2.4f
+        private const val PREVIOUS_LYRIC_DARKEN_WEIGHT = 0.72f
+        private const val LYRIC_TRANSITION_OFFSET_RATIO = 0.035f
+        private const val MIN_LYRIC_TRANSITION_OFFSET = 18f
+        private const val MAX_LYRIC_TRANSITION_OFFSET = 34f
         private const val FOOTER_BOTTOM_MARGIN = 18f
         private const val FOOTER_HORIZONTAL_MARGIN = 48f
+        private const val DOWNLOAD_ICON_SIZE = 18f
+        private const val DOWNLOAD_ICON_GAP = 8f
+        private const val DOWNLOAD_ICON_STROKE = 2.6f
         private const val ELLIPSIS = "..."
         private const val ALBUM_TEXT_TINT_WEIGHT = 0.50f
 
@@ -392,6 +563,16 @@ class LyricsSurfaceCallback : SurfaceCallback {
             textAlign = Paint.Align.CENTER
             isAntiAlias = true
             isFakeBoldText = true
+            setShadowLayer(6f, 0f, 2f, Color.BLACK)
+        }
+
+        private val ICON_PAINT = Paint().apply {
+            color = Color.WHITE
+            strokeWidth = DOWNLOAD_ICON_STROKE
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            isAntiAlias = true
             setShadowLayer(6f, 0f, 2f, Color.BLACK)
         }
 

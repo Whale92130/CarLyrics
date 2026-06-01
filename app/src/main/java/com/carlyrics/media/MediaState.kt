@@ -17,7 +17,8 @@ data class TrackInfo(
     val playbackSpeed: Float,
     val playbackUpdatedAtElapsedMillis: Long,
     val albumColors: List<Int> = emptyList(),
-    val lyrics: LyricsState = LyricsState.Loading
+    val lyrics: LyricsState = LyricsState.Loading,
+    val lyricsSavedOnDevice: Boolean = false
 ) {
     val lookupKey: String
         get() = listOf(

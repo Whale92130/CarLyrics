@@ -15,6 +15,7 @@ import android.service.notification.StatusBarNotification
 import android.util.Log
 import com.carlyrics.AppReset
 import com.carlyrics.lyrics.LrcLibClient
+import com.carlyrics.lyrics.LyricsCache
 import com.carlyrics.lyrics.LyricsQuery
 import com.carlyrics.lyrics.LyricsState
 import kotlin.math.abs
@@ -36,7 +37,8 @@ import java.util.concurrent.Future
 class MediaMonitorService : NotificationListenerService() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val lyricsClient = LrcLibClient()
+    private val lyricsCache by lazy { LyricsCache(applicationContext) }
+    private val lyricsClient by lazy { LrcLibClient(lyricsCache) }
     private val lyricsExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "LrcLibLyrics").apply { isDaemon = true }
     }
@@ -59,7 +61,8 @@ class MediaMonitorService : NotificationListenerService() {
 
     private var attached: MediaController? = null
     private var lyricsRequest: Future<*>? = null
-    private var lastLyricsLookupKey: String? = null
+    private var lastLyricsLookupQuery: LyricsQuery? = null
+    private var lyricsGeneration = 0
 
     private val controllerCallback = object : MediaController.Callback() {
         override fun onMetadataChanged(metadata: MediaMetadata?) {
@@ -188,36 +191,90 @@ class MediaMonitorService : NotificationListenerService() {
             return
         }
 
-        lastLyricsLookupKey = null
-        lyricsRequest?.cancel(true)
+        lastLyricsLookupQuery = null
         val resetTrack = current.copy(lyrics = LyricsState.Loading)
         MediaState.set(resetTrack)
-        maybeFetchLyrics(resetTrack)
+        maybeFetchLyrics(resetTrack, forceNetwork = true)
     }
 
-    private fun maybeFetchLyrics(track: TrackInfo) {
-        val lookupKey = track.lookupKey
-        if (lookupKey == lastLyricsLookupKey) return
+    private fun maybeFetchLyrics(track: TrackInfo, forceNetwork: Boolean = false) {
+        val query = track.toLyricsQuery()
+        if (query == lastLyricsLookupQuery) return
 
-        lastLyricsLookupKey = lookupKey
+        if (!forceNetwork) {
+            lyricsCache.get(query)?.let { cachedLyrics ->
+                lastLyricsLookupQuery = query
+                lyricsRequest?.cancel(true)
+                MediaState.set(
+                    track.copy(
+                        lyrics = cachedLyrics,
+                        lyricsSavedOnDevice = cachedLyrics is LyricsState.Found
+                    )
+                )
+                return
+            }
+        }
+
+        lastLyricsLookupQuery = query
+        val generation = ++lyricsGeneration
         lyricsRequest?.cancel(true)
         lyricsRequest = lyricsExecutor.submit {
-            val result = lyricsClient.fetchLyrics(track.toLyricsQuery())
+            if (!waitBeforeLyricsLookup()) return@submit
+            val result = fetchLyricsWithRetries(query, ignoreCache = forceNetwork)
+            val savedOnDevice = lyricsSavedOnDevice(query, result)
             mainHandler.post {
+                if (generation != lyricsGeneration) return@post
                 val current = MediaState.current ?: return@post
-                if (current.lookupKey == lookupKey) {
-                    if (current.lyrics is LyricsState.Found) return@post
-                    MediaState.set(current.copy(lyrics = result))
+                if (current.toLyricsQuery() != query) return@post
+                if (current.lyrics is LyricsState.Found) return@post
+                if (result is LyricsState.Error && lastLyricsLookupQuery == query) {
+                    lastLyricsLookupQuery = null
                 }
+                MediaState.set(
+                    current.copy(
+                        lyrics = result,
+                        lyricsSavedOnDevice = savedOnDevice
+                    )
+                )
             }
         }
     }
 
     private fun clearTrack() {
-        lastLyricsLookupKey = null
+        lastLyricsLookupQuery = null
         lyricsRequest?.cancel(true)
         MediaState.set(null)
     }
+
+    private fun waitBeforeLyricsLookup(): Boolean =
+        try {
+            Thread.sleep(LYRICS_LOOKUP_DEBOUNCE_MILLIS)
+            !Thread.currentThread().isInterrupted
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
+        }
+
+    private fun fetchLyricsWithRetries(
+        query: LyricsQuery,
+        ignoreCache: Boolean = false
+    ): LyricsState {
+        var result = lyricsClient.fetchLyrics(query, ignoreCache = ignoreCache)
+        for (delayMillis in LYRICS_ERROR_RETRY_DELAYS_MILLIS) {
+            if (result !is LyricsState.Error || Thread.currentThread().isInterrupted) return result
+            try {
+                Thread.sleep(delayMillis)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return result
+            }
+            result = lyricsClient.fetchLyrics(query, ignoreCache = ignoreCache)
+        }
+        return result
+    }
+
+    private fun lyricsSavedOnDevice(query: LyricsQuery, result: LyricsState): Boolean =
+        result is LyricsState.Found && lyricsCache.get(query) is LyricsState.Found
 
     private fun playbackPositionMillis(playbackState: PlaybackState?): Long? {
         val position = playbackState?.position ?: return null
@@ -248,7 +305,8 @@ class MediaMonitorService : NotificationListenerService() {
                 else -> observed.durationMillis
             },
             albumColors = observed.albumColors.ifEmpty { current.albumColors },
-            lyrics = current.lyrics
+            lyrics = current.lyrics,
+            lyricsSavedOnDevice = current.lyricsSavedOnDevice
         )
     }
 
@@ -332,6 +390,8 @@ class MediaMonitorService : NotificationListenerService() {
         private const val MIN_COLOR_VALUE = 0.12f
         private const val MAX_ALBUM_COLORS = 5
         private const val SAME_SONG_DURATION_TOLERANCE_MILLIS = 3_000L
+        private const val LYRICS_LOOKUP_DEBOUNCE_MILLIS = 500L
+        private val LYRICS_ERROR_RETRY_DELAYS_MILLIS = longArrayOf(750L, 1_500L)
 
         /**
          * Wrapper apps that proxy other media sessions for Android Auto purposes
