@@ -3,6 +3,7 @@ package com.carlyrics.car
 import androidx.car.app.AppManager
 import androidx.car.app.CarContext
 import androidx.car.app.Screen
+import androidx.car.app.ScreenManager
 import androidx.car.app.model.Action
 import androidx.car.app.model.ActionStrip
 import androidx.car.app.model.Template
@@ -31,7 +32,15 @@ class LyricsScreen(carContext: CarContext) : Screen(carContext) {
         return NavigationTemplate.Builder()
             .setActionStrip(
                 ActionStrip.Builder()
-                    .addAction(Action.Builder().setTitle("Lyrics").build())
+                    .addAction(
+                        Action.Builder()
+                            .setTitle("Menu")
+                            .setOnClickListener {
+                                carContext.getCarService(ScreenManager::class.java)
+                                    .push(LyricsMenuScreen(carContext))
+                            }
+                            .build()
+                    )
                     .build()
             )
             .build()

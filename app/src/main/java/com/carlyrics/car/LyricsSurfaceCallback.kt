@@ -42,11 +42,15 @@ class LyricsSurfaceCallback : SurfaceCallback {
             updateTicker()
         }
     }
+    private val settingsListener = LyricsDisplaySettings.Listener {
+        mainHandler.post { render() }
+    }
 
     override fun onSurfaceAvailable(surfaceContainer: SurfaceContainer) {
         Log.d(TAG, "onSurfaceAvailable ${surfaceContainer.width}x${surfaceContainer.height}")
         this.surfaceContainer = surfaceContainer
         MediaState.observe(trackListener)
+        LyricsDisplaySettings.observe(settingsListener)
         render()
         updateTicker()
     }
@@ -63,6 +67,7 @@ class LyricsSurfaceCallback : SurfaceCallback {
 
     override fun onSurfaceDestroyed(surfaceContainer: SurfaceContainer) {
         MediaState.stopObserving(trackListener)
+        LyricsDisplaySettings.stopObserving(settingsListener)
         mainHandler.removeCallbacks(ticker)
         this.surfaceContainer = null
         this.visibleArea = null
@@ -85,7 +90,8 @@ class LyricsSurfaceCallback : SurfaceCallback {
 
         try {
             val track = MediaState.current
-            canvas.drawColor(BACKGROUND_COLOR)
+            configurePaints()
+            canvas.drawColor(backgroundColor())
             val area = drawableArea(canvas, container)
             drawCenteredLyrics(canvas, area, track)
             if (track != null) {
@@ -272,9 +278,35 @@ class LyricsSurfaceCallback : SurfaceCallback {
         return (metrics.descent - metrics.ascent) * LINE_SPACING_MULTIPLIER
     }
 
+    private fun backgroundColor(): Int =
+        if (LyricsDisplaySettings.lightMode) LIGHT_BACKGROUND_COLOR else DARK_BACKGROUND_COLOR
+
+    private fun configurePaints() {
+        if (LyricsDisplaySettings.lightMode) {
+            TITLE_PAINT.apply {
+                color = Color.BLACK
+                clearShadowLayer()
+            }
+            META_PAINT.apply {
+                color = Color.BLACK
+                clearShadowLayer()
+            }
+        } else {
+            TITLE_PAINT.apply {
+                color = Color.WHITE
+                setShadowLayer(8f, 0f, 2f, Color.BLACK)
+            }
+            META_PAINT.apply {
+                color = Color.WHITE
+                setShadowLayer(6f, 0f, 2f, Color.BLACK)
+            }
+        }
+    }
+
     companion object {
         private const val TAG = "LyricsSurfaceCallback"
-        private const val BACKGROUND_COLOR = 0xFF0A0A0A.toInt()
+        private const val DARK_BACKGROUND_COLOR = 0xFF0A0A0A.toInt()
+        private const val LIGHT_BACKGROUND_COLOR = Color.WHITE
         private const val TICK_MILLIS = 350L
         private const val HORIZONTAL_MARGIN_RATIO = 0.08f
         private const val VERTICAL_MARGIN_RATIO = 0.12f
