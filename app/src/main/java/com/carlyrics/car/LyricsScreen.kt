@@ -3,6 +3,7 @@ package com.carlyrics.car
 import androidx.car.app.AppManager
 import androidx.car.app.CarContext
 import androidx.car.app.Screen
+import androidx.car.app.model.Action
 import androidx.car.app.model.ActionStrip
 import androidx.car.app.model.Template
 import androidx.car.app.navigation.model.NavigationTemplate
@@ -28,7 +29,11 @@ class LyricsScreen(carContext: CarContext) : Screen(carContext) {
     override fun onGetTemplate(): Template {
         registerSurfaceCallback()
         return NavigationTemplate.Builder()
-            .setActionStrip(ActionStrip.Builder().build())
+            .setActionStrip(
+                ActionStrip.Builder()
+                    .addAction(Action.Builder().setTitle("Lyrics").build())
+                    .build()
+            )
             .build()
     }
 
