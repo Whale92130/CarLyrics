@@ -79,6 +79,7 @@ class LrcLibClient(
                     .mapNotNull { index -> array.optJSONObject(index) }
             }
             .filter { record -> record.hasUsableLyrics() }
+            .filter { record -> isCompatibleCandidate(record, query) }
             .distinctBy { record ->
                 record.optLong("id", -1L).takeIf { it >= 0L }
                     ?: listOf(
@@ -91,6 +92,25 @@ class LrcLibClient(
             .filter { (_, score) -> score >= minimumScore(query) }
             .maxByOrNull { (_, score) -> score }
             ?.first
+    }
+
+    private fun isCompatibleCandidate(record: JSONObject, query: LyricsQuery): Boolean {
+        val requestedArtist = normalize(query.artistName)
+        if (requestedArtist.isNotEmpty()) {
+            val artist = normalize(record.optNullableString("artistName", "artist_name"))
+            return artist.isNotEmpty() &&
+                (artist == requestedArtist ||
+                    artist.contains(requestedArtist) ||
+                    requestedArtist.contains(artist))
+        }
+
+        if (isAmbiguousTitle(query.trackName)) {
+            val requestedDuration = query.durationSeconds ?: return false
+            val recordDuration = record.optDurationSeconds() ?: return false
+            return abs(recordDuration - requestedDuration) <= AMBIGUOUS_TITLE_DURATION_TOLERANCE_SECONDS
+        }
+
+        return true
     }
 
     private fun minimumScore(query: LyricsQuery): Int =
@@ -284,6 +304,7 @@ class LrcLibClient(
         private const val CONNECT_TIMEOUT_MILLIS = 5_000
         private const val READ_TIMEOUT_MILLIS = 10_000
         private const val USER_AGENT = "CarLyrics/1.0 Android"
+        private const val AMBIGUOUS_TITLE_DURATION_TOLERANCE_SECONDS = 2L
         private val TIMESTAMP_REGEX = Regex("\\[(\\d{1,3}):(\\d{2})(?:[.:](\\d{1,3}))?]")
 
         private fun normalize(value: String?): String =
@@ -292,5 +313,11 @@ class LrcLibClient(
                 ?.lowercase()
                 ?.replace(Regex("\\s+"), " ")
                 .orEmpty()
+
+        private fun isAmbiguousTitle(value: String): Boolean =
+            normalize(value)
+                .split(" ")
+                .filter { it.isNotBlank() }
+                .size <= 2
     }
 }
