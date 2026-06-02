@@ -5,7 +5,7 @@ import kotlin.math.roundToInt
 
 /**
  * Single source of truth for the text shown as the "current lyric line"
- * on both the center-stack map surface and the head-unit HUD trip.
+ * on the center-stack map surface.
  */
 object CurrentLyric {
 
