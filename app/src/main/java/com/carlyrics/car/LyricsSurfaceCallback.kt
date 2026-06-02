@@ -12,6 +12,7 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.car.app.SurfaceCallback
 import androidx.car.app.SurfaceContainer
+import com.carlyrics.lyrics.CurrentLyric
 import com.carlyrics.lyrics.LyricsState
 import com.carlyrics.media.MediaState
 import com.carlyrics.media.TrackInfo
@@ -105,6 +106,7 @@ class LyricsSurfaceCallback : SurfaceCallback {
             drawCenteredLyrics(canvas, area, track)
             if (track != null) {
                 drawSongFooter(canvas, area, track)
+                drawProgressBar(canvas, area, track)
             }
             Log.d(
                 TAG,
@@ -164,6 +166,21 @@ class LyricsSurfaceCallback : SurfaceCallback {
         }
     }
 
+    private fun drawProgressBar(canvas: Canvas, area: Rect, track: TrackInfo) {
+        val duration = track.durationMillis ?: return
+        if (duration <= 0L) return
+
+        val position = track.estimatedPositionMillis(SystemClock.elapsedRealtime()) ?: return
+        val progress = (position.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
+        val left = area.left + PROGRESS_HORIZONTAL_MARGIN
+        val right = area.right - PROGRESS_HORIZONTAL_MARGIN
+        if (right <= left) return
+
+        val y = area.bottom - PROGRESS_BOTTOM_MARGIN
+        canvas.drawLine(left, y, right, y, PROGRESS_TRACK_PAINT)
+        canvas.drawLine(left, y, left + (right - left) * progress, y, PROGRESS_FILL_PAINT)
+    }
+
     private fun drawDownloadIcon(canvas: Canvas, left: Float, textBaseline: Float) {
         val textTop = textBaseline + META_PAINT.ascent()
         val textBottom = textBaseline + META_PAINT.descent()
@@ -185,12 +202,8 @@ class LyricsSurfaceCallback : SurfaceCallback {
     }
 
     private fun drawCenteredLyrics(canvas: Canvas, area: Rect, track: TrackInfo?) {
-        val targetText = if (track == null) {
-            "No song playing"
-        } else {
-            lyricDisplay(track)
-        }
         val now = SystemClock.elapsedRealtime()
+        val targetText = CurrentLyric.textFor(track, now)
         updateLyricTransition(track?.lookupKey, targetText, now)
 
         val previousText = previousLyricText
@@ -321,37 +334,6 @@ class LyricsSurfaceCallback : SurfaceCallback {
         return 1f - inverse * inverse * inverse
     }
 
-    private fun lyricDisplay(track: TrackInfo): String =
-        when (val lyrics = track.lyrics) {
-            LyricsState.Loading -> "Finding lyrics..."
-            LyricsState.Instrumental -> "Instrumental"
-            LyricsState.NotFound -> "Lyrics not found"
-            is LyricsState.Error -> "Lyrics unavailable"
-            is LyricsState.Found -> lyricDisplay(track, lyrics)
-        }
-
-    private fun lyricDisplay(track: TrackInfo, lyrics: LyricsState.Found): String {
-        if (lyrics.lines.isEmpty()) return "Lyrics not found"
-
-        val index = currentLyricIndex(track, lyrics)
-        return lyrics.lines[index].text
-    }
-
-    private fun currentLyricIndex(track: TrackInfo, lyrics: LyricsState.Found): Int {
-        val position = track.estimatedPositionMillis(SystemClock.elapsedRealtime()) ?: return 0
-
-        if (lyrics.synced) {
-            return lyrics.lines
-                .indexOfLast { line -> line.startMillis?.let { it <= position } == true }
-                .coerceAtLeast(0)
-        }
-
-        val duration = track.durationMillis ?: return 0
-        if (duration <= 0L) return 0
-        val progress = (position.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
-        return (progress * lyrics.lines.lastIndex).roundToInt().coerceIn(0, lyrics.lines.lastIndex)
-    }
-
     private fun updateTicker() {
         mainHandler.removeCallbacks(ticker)
 
@@ -366,7 +348,8 @@ class LyricsSurfaceCallback : SurfaceCallback {
 
         val lyrics = track.lyrics as? LyricsState.Found
         val shouldTickLyrics = lyrics?.synced == true
-        if (!shouldTickLyrics) return
+        val shouldTickProgress = track.durationMillis != null && track.playbackPositionMillis != null
+        if (!shouldTickLyrics && !shouldTickProgress) return
 
         mainHandler.postDelayed(ticker, TICK_MILLIS)
     }
@@ -460,6 +443,14 @@ class LyricsSurfaceCallback : SurfaceCallback {
                 color = Color.BLACK
                 clearShadowLayer()
             }
+            PROGRESS_TRACK_PAINT.apply {
+                color = LIGHT_PROGRESS_TRACK_COLOR
+                clearShadowLayer()
+            }
+            PROGRESS_FILL_PAINT.apply {
+                color = Color.BLACK
+                clearShadowLayer()
+            }
         } else {
             TITLE_PAINT.apply {
                 color = Color.WHITE
@@ -474,6 +465,14 @@ class LyricsSurfaceCallback : SurfaceCallback {
             ICON_PAINT.apply {
                 color = Color.WHITE
                 setShadowLayer(6f, 0f, 2f, Color.BLACK)
+            }
+            PROGRESS_TRACK_PAINT.apply {
+                color = DARK_PROGRESS_TRACK_COLOR
+                clearShadowLayer()
+            }
+            PROGRESS_FILL_PAINT.apply {
+                color = Color.WHITE
+                setShadowLayer(4f, 0f, 1f, Color.BLACK)
             }
         }
     }
@@ -545,6 +544,12 @@ class LyricsSurfaceCallback : SurfaceCallback {
         private const val DOWNLOAD_ICON_SIZE = 18f
         private const val DOWNLOAD_ICON_GAP = 8f
         private const val DOWNLOAD_ICON_STROKE = 2.6f
+        private const val PROGRESS_HORIZONTAL_MARGIN = 64f
+        private const val PROGRESS_BOTTOM_MARGIN = 7f
+        private const val PROGRESS_TRACK_STROKE = 5f
+        private const val PROGRESS_FILL_STROKE = 5f
+        private const val DARK_PROGRESS_TRACK_COLOR = 0xFF333333.toInt()
+        private const val LIGHT_PROGRESS_TRACK_COLOR = 0xFFE0E0E0.toInt()
         private const val ELLIPSIS = "..."
         private const val ALBUM_TEXT_TINT_WEIGHT = 0.50f
 
@@ -574,6 +579,23 @@ class LyricsSurfaceCallback : SurfaceCallback {
             strokeJoin = Paint.Join.ROUND
             isAntiAlias = true
             setShadowLayer(6f, 0f, 2f, Color.BLACK)
+        }
+
+        private val PROGRESS_TRACK_PAINT = Paint().apply {
+            color = DARK_PROGRESS_TRACK_COLOR
+            strokeWidth = PROGRESS_TRACK_STROKE
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            isAntiAlias = true
+        }
+
+        private val PROGRESS_FILL_PAINT = Paint().apply {
+            color = Color.WHITE
+            strokeWidth = PROGRESS_FILL_STROKE
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            isAntiAlias = true
+            setShadowLayer(4f, 0f, 1f, Color.BLACK)
         }
 
     }

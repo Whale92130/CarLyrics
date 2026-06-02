@@ -10,15 +10,26 @@ object LyricsDisplaySettings {
     var lightMode: Boolean = false
         private set
 
+    @Volatile
+    var hudTripEnabled: Boolean = true
+        private set
+
     fun setLightMode(enabled: Boolean) {
         if (lightMode == enabled) return
         lightMode = enabled
         notifyChanged()
     }
 
+    fun setHudTripEnabled(enabled: Boolean) {
+        if (hudTripEnabled == enabled) return
+        hudTripEnabled = enabled
+        notifyChanged()
+    }
+
     fun reset() {
-        val changed = lightMode
+        val changed = lightMode || !hudTripEnabled
         lightMode = false
+        hudTripEnabled = true
         if (changed) notifyChanged()
     }
 

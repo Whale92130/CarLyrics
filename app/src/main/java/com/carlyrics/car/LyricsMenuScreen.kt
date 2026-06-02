@@ -26,6 +26,19 @@ class LyricsMenuScreen(carContext: CarContext) : Screen(carContext) {
             )
             .build()
 
+        val hudTripRow = Row.Builder()
+            .setTitle("HUD navigation")
+            .addText("Show lyrics on the HUD (disable to use Maps)")
+            .setToggle(
+                Toggle.Builder { enabled ->
+                    LyricsDisplaySettings.setHudTripEnabled(enabled)
+                    invalidate()
+                }
+                    .setChecked(LyricsDisplaySettings.hudTripEnabled)
+                    .build()
+            )
+            .build()
+
         val resetRow = Row.Builder()
             .setTitle("Reset")
             .addText("Restore defaults and fetch lyrics again")
@@ -44,6 +57,7 @@ class LyricsMenuScreen(carContext: CarContext) : Screen(carContext) {
             .setSingleList(
                 ItemList.Builder()
                     .addItem(lightModeRow)
+                    .addItem(hudTripRow)
                     .addItem(resetRow)
                     .build()
             )
