@@ -75,6 +75,7 @@ class LyricsCache(context: Context) {
         return files
             .mapNotNull { file -> readEntry(file) }
             .sortedByDescending { entry -> entry.cachedAtMillis }
+            .distinctBy { entry -> entry.normalizedKey() }
     }
 
     private fun readEntry(file: File): CachedLyricsEntry? =
@@ -170,11 +171,23 @@ class LyricsCache(context: Context) {
     }
 
     private fun normalize(value: String?): String =
-        value
-            ?.trim()
+        stripLosslessSuffix(value)
             ?.lowercase()
             ?.replace(Regex("\\s+"), " ")
             .orEmpty()
+
+    private fun CachedLyricsEntry.normalizedKey(): String =
+        listOf(
+            normalize(trackName),
+            normalize(artistName)
+        ).joinToString("|")
+
+    private fun stripLosslessSuffix(value: String?): String? =
+        value
+            ?.trim()
+            ?.replace(LOSSLESS_SUFFIX_REGEX, "")
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
 
     private fun sha1(value: String): String {
         val bytes = MessageDigest.getInstance("SHA-1").digest(value.toByteArray(Charsets.UTF_8))
@@ -197,5 +210,7 @@ class LyricsCache(context: Context) {
         private const val TYPE_SYNCED = "synced"
         private const val TYPE_PLAIN = "plain"
         private const val TYPE_INSTRUMENTAL = "instrumental"
+        private val LOSSLESS_SUFFIX_REGEX =
+            Regex("""(?i)(?:\s*[-|/.•·]\s*|\s+)\(?lossless\)?$""")
     }
 }

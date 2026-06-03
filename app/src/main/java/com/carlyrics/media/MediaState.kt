@@ -70,8 +70,17 @@ object MediaState {
 }
 
 private fun normalize(value: String?): String =
-    value
-        ?.trim()
+    stripLosslessSuffix(value)
         ?.lowercase()
         ?.replace(Regex("\\s+"), " ")
         .orEmpty()
+
+private fun stripLosslessSuffix(value: String?): String? =
+    value
+        ?.trim()
+        ?.replace(LOSSLESS_SUFFIX_REGEX, "")
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+
+private val LOSSLESS_SUFFIX_REGEX =
+    Regex("""(?i)(?:\s*[-|/.•·]\s*|\s+)\(?lossless\)?$""")

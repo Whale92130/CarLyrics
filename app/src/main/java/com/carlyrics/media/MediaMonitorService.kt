@@ -63,6 +63,16 @@ class MediaMonitorService : NotificationListenerService() {
     private var lyricsRequest: Future<*>? = null
     private var lastLyricsLookupQuery: LyricsQuery? = null
     private var lyricsGeneration = 0
+    private var pendingTrackStartSyncKey: String? = null
+    private var pendingTrackStartSyncIndex = 0
+    private var periodicPositionSyncKey: String? = null
+
+    private val trackStartSyncRunnable = Runnable {
+        syncPlaybackPositionAfterTrackStart()
+    }
+    private val periodicPositionSyncRunnable = Runnable {
+        syncPlaybackPositionPeriodically()
+    }
 
     private val controllerCallback = object : MediaController.Callback() {
         override fun onMetadataChanged(metadata: MediaMetadata?) {
@@ -101,6 +111,8 @@ class MediaMonitorService : NotificationListenerService() {
 
     override fun onDestroy() {
         AppReset.stopObserving(resetListener)
+        cancelTrackStartPositionSync()
+        cancelPeriodicPositionSync()
         lyricsRequest?.cancel(true)
         lyricsExecutor.shutdownNow()
         super.onDestroy()
@@ -108,8 +120,11 @@ class MediaMonitorService : NotificationListenerService() {
 
     private fun attachToBestController(controllers: List<MediaController>) {
         Log.d(TAG, "Active sessions: ${controllers.map { it.packageName }}")
-        val best = controllers.firstOrNull { it.packageName !in BLOCKED_PACKAGES }
-            ?: controllers.firstOrNull()
+        val lyricCandidates = controllers.filterNot { controller ->
+            shouldIgnoreForLyrics(controller.packageName)
+        }
+        val best = lyricCandidates.firstOrNull { it.packageName !in BLOCKED_PACKAGES }
+            ?: lyricCandidates.firstOrNull()
 
         if (best == null) {
             detach()
@@ -121,12 +136,16 @@ class MediaMonitorService : NotificationListenerService() {
         Log.d(TAG, "Attaching to ${best.packageName}")
         detach()
         attached = best
+        MediaControls.setController(best)
         best.registerCallback(controllerCallback)
         publish(best.packageName, best.metadata, best.playbackState)
     }
 
     private fun detach() {
-        attached?.unregisterCallback(controllerCallback)
+        attached?.let { controller ->
+            MediaControls.clearController(controller)
+            controller.unregisterCallback(controllerCallback)
+        }
         attached = null
     }
 
@@ -135,6 +154,10 @@ class MediaMonitorService : NotificationListenerService() {
         metadata: MediaMetadata?,
         playbackState: PlaybackState?
     ) {
+        if (shouldIgnoreForLyrics(packageName)) {
+            clearTrack()
+            return
+        }
         if (metadata == null) {
             clearTrack()
             return
@@ -145,23 +168,28 @@ class MediaMonitorService : NotificationListenerService() {
         val artist = metadata.getString(MediaMetadata.METADATA_KEY_ARTIST)
             ?: metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST)
             ?: metadata.getString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE)
+        val cleanArtist = stripLosslessSuffix(artist)
         val album = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM)
         val durationMillis = metadata.getLong(MediaMetadata.METADATA_KEY_DURATION)
             .takeIf { it > 0L }
 
         Log.d(
             TAG,
-            "[$packageName] title='$title' artist='$artist' album='$album' duration=$durationMillis"
+            "[$packageName] title='$title' artist='$cleanArtist' album='$album' duration=$durationMillis"
         )
 
         if (title.isNullOrBlank()) {
             clearTrack()
             return
         }
+        if (isSpotifyDjInterlude(title, cleanArtist)) {
+            clearTrack()
+            return
+        }
 
         val observedTrack = TrackInfo(
             title = title.trim(),
-            artist = artist?.trim()?.takeIf { it.isNotEmpty() },
+            artist = cleanArtist,
             album = album?.trim()?.takeIf { it.isNotEmpty() },
             durationMillis = durationMillis,
             playbackPositionMillis = playbackPositionMillis(playbackState),
@@ -172,10 +200,17 @@ class MediaMonitorService : NotificationListenerService() {
             albumColors = extractAlbumColors(metadata)
         )
 
+        val isNewLikelySong = MediaState.current
+            ?.let { current -> !isSameLikelySong(observedTrack, current) }
+            ?: true
         val track = mergeWithCurrent(observedTrack, MediaState.current)
 
         MediaState.set(track)
         maybeFetchLyrics(track)
+        ensurePeriodicPositionSync(track.lookupKey)
+        if (isNewLikelySong) {
+            scheduleTrackStartPositionSync(track.lookupKey)
+        }
     }
 
     private fun resetAndRefetchLyrics() {
@@ -241,9 +276,129 @@ class MediaMonitorService : NotificationListenerService() {
     }
 
     private fun clearTrack() {
+        cancelTrackStartPositionSync()
+        cancelPeriodicPositionSync()
         lastLyricsLookupQuery = null
         lyricsRequest?.cancel(true)
         MediaState.set(null)
+    }
+
+    private fun scheduleTrackStartPositionSync(trackKey: String) {
+        pendingTrackStartSyncKey = trackKey
+        pendingTrackStartSyncIndex = 0
+        mainHandler.removeCallbacks(trackStartSyncRunnable)
+        mainHandler.postDelayed(
+            trackStartSyncRunnable,
+            TRACK_START_POSITION_SYNC_DELAYS_MILLIS[pendingTrackStartSyncIndex]
+        )
+    }
+
+    private fun cancelTrackStartPositionSync() {
+        pendingTrackStartSyncKey = null
+        pendingTrackStartSyncIndex = 0
+        mainHandler.removeCallbacks(trackStartSyncRunnable)
+    }
+
+    private fun syncPlaybackPositionAfterTrackStart() {
+        val expectedTrackKey = pendingTrackStartSyncKey ?: return
+
+        val current = MediaState.current ?: return
+        if (current.lookupKey != expectedTrackKey) {
+            cancelTrackStartPositionSync()
+            return
+        }
+
+        val controller = attached ?: return
+        publish(
+            packageName = controller.packageName,
+            metadata = controller.metadata,
+            playbackState = controller.playbackState
+        )
+        scheduleNextTrackStartPositionSync(expectedTrackKey)
+    }
+
+    private fun scheduleNextTrackStartPositionSync(trackKey: String) {
+        val nextIndex = pendingTrackStartSyncIndex + 1
+        if (nextIndex >= TRACK_START_POSITION_SYNC_DELAYS_MILLIS.size) {
+            cancelTrackStartPositionSync()
+            return
+        }
+
+        val current = MediaState.current
+        if (current?.lookupKey != trackKey) {
+            cancelTrackStartPositionSync()
+            return
+        }
+
+        pendingTrackStartSyncKey = trackKey
+        pendingTrackStartSyncIndex = nextIndex
+        mainHandler.removeCallbacks(trackStartSyncRunnable)
+        mainHandler.postDelayed(
+            trackStartSyncRunnable,
+            TRACK_START_POSITION_SYNC_DELAYS_MILLIS[nextIndex]
+        )
+    }
+
+    private fun ensurePeriodicPositionSync(trackKey: String) {
+        if (periodicPositionSyncKey == trackKey) return
+        periodicPositionSyncKey = trackKey
+        mainHandler.removeCallbacks(periodicPositionSyncRunnable)
+        mainHandler.postDelayed(
+            periodicPositionSyncRunnable,
+            PERIODIC_POSITION_SYNC_MILLIS
+        )
+    }
+
+    private fun cancelPeriodicPositionSync() {
+        periodicPositionSyncKey = null
+        mainHandler.removeCallbacks(periodicPositionSyncRunnable)
+    }
+
+    private fun syncPlaybackPositionPeriodically() {
+        val expectedTrackKey = periodicPositionSyncKey ?: return
+        val current = MediaState.current
+        if (current?.lookupKey != expectedTrackKey) {
+            cancelPeriodicPositionSync()
+            return
+        }
+
+        val controller = attached
+        if (controller == null) {
+            cancelPeriodicPositionSync()
+            return
+        }
+
+        publish(
+            packageName = controller.packageName,
+            metadata = controller.metadata,
+            playbackState = controller.playbackState
+        )
+        rebaseCurrentPlaybackAnchor(expectedTrackKey)
+
+        val refreshed = MediaState.current
+        if (refreshed?.lookupKey == expectedTrackKey) {
+            mainHandler.removeCallbacks(periodicPositionSyncRunnable)
+            mainHandler.postDelayed(
+                periodicPositionSyncRunnable,
+                PERIODIC_POSITION_SYNC_MILLIS
+            )
+        } else {
+            cancelPeriodicPositionSync()
+        }
+    }
+
+    private fun rebaseCurrentPlaybackAnchor(trackKey: String) {
+        val current = MediaState.current ?: return
+        if (current.lookupKey != trackKey) return
+
+        val now = SystemClock.elapsedRealtime()
+        val position = current.estimatedPositionMillis(now) ?: return
+        MediaState.set(
+            current.copy(
+                playbackPositionMillis = position,
+                playbackUpdatedAtElapsedMillis = now
+            )
+        )
     }
 
     private fun waitBeforeLyricsLookup(): Boolean =
@@ -327,12 +482,28 @@ class MediaMonitorService : NotificationListenerService() {
         return abs(first - second) <= SAME_SONG_DURATION_TOLERANCE_MILLIS
     }
 
+    private fun shouldIgnoreForLyrics(packageName: String?): Boolean =
+        packageName
+            ?.lowercase()
+            ?.contains(AUDIBLE_PACKAGE_MARKER)
+            ?: false
+
+    private fun isSpotifyDjInterlude(title: String, artist: String?): Boolean =
+        normalize(title) == SPOTIFY_DJ_UP_NEXT_TITLE &&
+            normalize(artist).replace(" ", "") == SPOTIFY_DJ_ARTIST
+
     private fun normalize(value: String?): String =
-        value
-            ?.trim()
+        stripLosslessSuffix(value)
             ?.lowercase()
             ?.replace(Regex("\\s+"), " ")
             .orEmpty()
+
+    private fun stripLosslessSuffix(value: String?): String? =
+        value
+            ?.trim()
+            ?.replace(LOSSLESS_SUFFIX_REGEX, "")
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
 
     private fun dominantColors(bitmap: Bitmap): List<Int> {
         val counts = mutableMapOf<Int, Int>()
@@ -391,7 +562,20 @@ class MediaMonitorService : NotificationListenerService() {
         private const val MAX_ALBUM_COLORS = 5
         private const val SAME_SONG_DURATION_TOLERANCE_MILLIS = 3_000L
         private const val LYRICS_LOOKUP_DEBOUNCE_MILLIS = 500L
+        private const val PERIODIC_POSITION_SYNC_MILLIS = 30_000L
+        private val TRACK_START_POSITION_SYNC_DELAYS_MILLIS = longArrayOf(
+            1_000L,
+            1_000L,
+            1_500L,
+            1_500L,
+            3_000L
+        )
         private val LYRICS_ERROR_RETRY_DELAYS_MILLIS = longArrayOf(750L, 1_500L)
+        private val LOSSLESS_SUFFIX_REGEX =
+            Regex("""(?i)(?:\s*[-|/.•·]\s*|\s+)\(?lossless\)?$""")
+        private const val AUDIBLE_PACKAGE_MARKER = "audible"
+        private const val SPOTIFY_DJ_UP_NEXT_TITLE = "up next"
+        private const val SPOTIFY_DJ_ARTIST = "djx"
 
         /**
          * Wrapper apps that proxy other media sessions for Android Auto purposes

@@ -40,8 +40,6 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.material)
     implementation(libs.androidx.car.app)
-    implementation(libs.shizuku.api)
-    implementation(libs.shizuku.provider)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)

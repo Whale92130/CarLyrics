@@ -3,8 +3,10 @@ package com.carlyrics.car
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RadialGradient
 import android.graphics.Rect
+import android.graphics.RectF
 import android.graphics.Shader
 import android.os.Handler
 import android.os.Looper
@@ -14,10 +16,12 @@ import androidx.car.app.SurfaceCallback
 import androidx.car.app.SurfaceContainer
 import com.carlyrics.lyrics.CurrentLyric
 import com.carlyrics.lyrics.LyricsState
+import com.carlyrics.media.MediaControls
 import com.carlyrics.media.MediaState
 import com.carlyrics.media.TrackInfo
 import kotlin.math.max
 import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 /**
  * Draws the current LRCLIB lyric line onto the
@@ -35,6 +39,7 @@ class LyricsSurfaceCallback : SurfaceCallback {
     private var displayedLyricText: String? = null
     private var previousLyricText: String? = null
     private var lyricTransitionStartedAtElapsedMillis: Long = 0L
+    private val transportButtons = mutableListOf<TransportButton>()
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val ticker = object : Runnable {
@@ -58,6 +63,10 @@ class LyricsSurfaceCallback : SurfaceCallback {
     override fun onSurfaceAvailable(surfaceContainer: SurfaceContainer) {
         Log.d(TAG, "onSurfaceAvailable ${surfaceContainer.width}x${surfaceContainer.height}")
         this.surfaceContainer = surfaceContainer
+        LyricsDisplaySettings.setMeasuredSurfaceSize(
+            surfaceContainer.width,
+            surfaceContainer.height
+        )
         MediaState.observe(trackListener)
         LyricsDisplaySettings.observe(settingsListener)
         render()
@@ -81,7 +90,21 @@ class LyricsSurfaceCallback : SurfaceCallback {
         this.surfaceContainer = null
         this.visibleArea = null
         this.stableArea = null
+        transportButtons.clear()
         resetLyricTransition()
+    }
+
+    override fun onClick(x: Float, y: Float) {
+        val action = transportButtons.firstOrNull { button ->
+            button.bounds.contains(x, y)
+        }?.action ?: return
+
+        when (action) {
+            TransportAction.Previous -> MediaControls.skipToPrevious()
+            TransportAction.PlayPause -> MediaControls.togglePlayPause()
+            TransportAction.Next -> MediaControls.skipToNext()
+        }
+        render()
     }
 
     private fun render() {
@@ -105,8 +128,15 @@ class LyricsSurfaceCallback : SurfaceCallback {
             canvas.drawColor(backgroundColor())
             drawCenteredLyrics(canvas, area, track)
             if (track != null) {
+                if (shouldShowTransportControls()) {
+                    drawTransportControls(canvas, area)
+                } else {
+                    transportButtons.clear()
+                }
                 drawSongFooter(canvas, area, track)
                 drawProgressBar(canvas, area, track)
+            } else {
+                transportButtons.clear()
             }
             Log.d(
                 TAG,
@@ -142,6 +172,7 @@ class LyricsSurfaceCallback : SurfaceCallback {
     }
 
     private fun drawSongFooter(canvas: Canvas, area: Rect, track: TrackInfo) {
+        META_PAINT.textSize = footerTextSize(area)
         val maxWidth = (area.width() - FOOTER_HORIZONTAL_MARGIN * 2f).coerceAtLeast(1f)
         val label = listOfNotNull(track.title, track.artist)
             .joinToString(" - ")
@@ -166,6 +197,21 @@ class LyricsSurfaceCallback : SurfaceCallback {
         }
     }
 
+    private fun footerTextSize(area: Rect): Float =
+        (area.height().coerceAtLeast(1) *
+            FOOTER_TEXT_SIZE_HEIGHT_RATIO *
+            footerTextAspectScale(area) *
+            FOOTER_TEXT_SIZE_MULTIPLIER)
+            .coerceAtLeast(MIN_FOOTER_TEXT_SIZE)
+
+    private fun footerTextAspectScale(area: Rect): Float {
+        val height = area.height()
+        if (height <= 0) return 1f
+        val aspect = area.width().toFloat() / height.toFloat()
+        return sqrt(aspect / FOOTER_TEXT_REFERENCE_ASPECT_RATIO)
+            .coerceIn(MIN_FOOTER_TEXT_ASPECT_SCALE, MAX_FOOTER_TEXT_ASPECT_SCALE)
+    }
+
     private fun drawProgressBar(canvas: Canvas, area: Rect, track: TrackInfo) {
         val duration = track.durationMillis ?: return
         if (duration <= 0L) return
@@ -179,6 +225,129 @@ class LyricsSurfaceCallback : SurfaceCallback {
         val y = area.bottom - PROGRESS_BOTTOM_MARGIN
         canvas.drawLine(left, y, right, y, PROGRESS_TRACK_PAINT)
         canvas.drawLine(left, y, left + (right - left) * progress, y, PROGRESS_FILL_PAINT)
+    }
+
+    private fun drawTransportControls(canvas: Canvas, area: Rect) {
+        val buttons = transportButtonLayout(area)
+        transportButtons.clear()
+        transportButtons.addAll(buttons)
+
+        configureTransportPaints()
+        for (button in buttons) {
+            val radius = button.bounds.width() * TRANSPORT_BUTTON_RADIUS_RATIO
+            canvas.drawRoundRect(button.bounds, radius, radius, TRANSPORT_BUTTON_PAINT)
+            canvas.drawRoundRect(button.bounds, radius, radius, TRANSPORT_BUTTON_STROKE_PAINT)
+            when (button.action) {
+                TransportAction.Previous -> drawPreviousIcon(canvas, button.bounds)
+                TransportAction.PlayPause -> drawPlayPauseIcon(canvas, button.bounds)
+                TransportAction.Next -> drawNextIcon(canvas, button.bounds)
+            }
+        }
+    }
+
+    private fun transportButtonLayout(area: Rect): List<TransportButton> {
+        val size = transportButtonSize(area)
+        val gap = size * TRANSPORT_BUTTON_GAP_RATIO
+        val left = area.left + (area.width() * TRANSPORT_COLUMN_LEFT_RATIO)
+            .coerceIn(MIN_TRANSPORT_COLUMN_LEFT, MAX_TRANSPORT_COLUMN_LEFT)
+        val top = area.exactCenterY() - (size * 3f + gap * 2f) / 2f
+
+        return listOf(
+            TransportButton(
+                TransportAction.Previous,
+                RectF(left, top, left + size, top + size)
+            ),
+            TransportButton(
+                TransportAction.PlayPause,
+                RectF(left, top + size + gap, left + size, top + size * 2f + gap)
+            ),
+            TransportButton(
+                TransportAction.Next,
+                RectF(left, top + size * 2f + gap * 2f, left + size, top + size * 3f + gap * 2f)
+            )
+        )
+    }
+
+    private fun transportButtonSize(area: Rect): Float =
+        (area.height() * TRANSPORT_BUTTON_HEIGHT_RATIO)
+            .coerceIn(MIN_TRANSPORT_BUTTON_SIZE, MAX_TRANSPORT_BUTTON_SIZE)
+
+    private fun transportControlsReservedWidth(area: Rect): Float {
+        val size = transportButtonSize(area)
+        val left = (area.width() * TRANSPORT_COLUMN_LEFT_RATIO)
+            .coerceIn(MIN_TRANSPORT_COLUMN_LEFT, MAX_TRANSPORT_COLUMN_LEFT)
+        return left + size + TRANSPORT_TEXT_CLEARANCE
+    }
+
+    private fun drawPreviousIcon(canvas: Canvas, bounds: RectF) {
+        val cx = bounds.centerX()
+        val cy = bounds.centerY()
+        val w = bounds.width()
+        val barX = cx - w * 0.20f
+        val triangleLeft = cx + w * 0.18f
+        val triangleRight = cx - w * 0.08f
+        val top = cy - w * 0.18f
+        val bottom = cy + w * 0.18f
+
+        canvas.drawLine(barX, top, barX, bottom, TRANSPORT_ICON_STROKE_PAINT)
+        val path = Path().apply {
+            moveTo(triangleLeft, top)
+            lineTo(triangleRight, cy)
+            lineTo(triangleLeft, bottom)
+            close()
+        }
+        canvas.drawPath(path, TRANSPORT_ICON_FILL_PAINT)
+    }
+
+    private fun drawNextIcon(canvas: Canvas, bounds: RectF) {
+        val cx = bounds.centerX()
+        val cy = bounds.centerY()
+        val w = bounds.width()
+        val barX = cx + w * 0.20f
+        val triangleLeft = cx - w * 0.18f
+        val triangleRight = cx + w * 0.08f
+        val top = cy - w * 0.18f
+        val bottom = cy + w * 0.18f
+
+        val path = Path().apply {
+            moveTo(triangleLeft, top)
+            lineTo(triangleRight, cy)
+            lineTo(triangleLeft, bottom)
+            close()
+        }
+        canvas.drawPath(path, TRANSPORT_ICON_FILL_PAINT)
+        canvas.drawLine(barX, top, barX, bottom, TRANSPORT_ICON_STROKE_PAINT)
+    }
+
+    private fun drawPlayPauseIcon(canvas: Canvas, bounds: RectF) {
+        val cx = bounds.centerX()
+        val cy = bounds.centerY()
+        val w = bounds.width()
+        if (MediaControls.isPlaying()) {
+            val barWidth = w * 0.08f
+            val barHeight = w * 0.34f
+            val gap = w * 0.09f
+            canvas.drawRoundRect(
+                RectF(cx - gap - barWidth, cy - barHeight / 2f, cx - gap, cy + barHeight / 2f),
+                barWidth / 2f,
+                barWidth / 2f,
+                TRANSPORT_ICON_FILL_PAINT
+            )
+            canvas.drawRoundRect(
+                RectF(cx + gap, cy - barHeight / 2f, cx + gap + barWidth, cy + barHeight / 2f),
+                barWidth / 2f,
+                barWidth / 2f,
+                TRANSPORT_ICON_FILL_PAINT
+            )
+        } else {
+            val path = Path().apply {
+                moveTo(cx - w * 0.12f, cy - w * 0.20f)
+                lineTo(cx - w * 0.12f, cy + w * 0.20f)
+                lineTo(cx + w * 0.20f, cy)
+                close()
+            }
+            canvas.drawPath(path, TRANSPORT_ICON_FILL_PAINT)
+        }
     }
 
     private fun drawDownloadIcon(canvas: Canvas, left: Float, textBaseline: Float) {
@@ -263,6 +432,10 @@ class LyricsSurfaceCallback : SurfaceCallback {
             .coerceIn(MIN_VERTICAL_MARGIN, MAX_VERTICAL_MARGIN)
             .roundToInt()
         textArea.inset(horizontalMargin, verticalMargin)
+        if (track != null && shouldShowTransportControls()) {
+            val controlSafeLeft = area.left + transportControlsReservedWidth(area).roundToInt()
+            textArea.left = max(textArea.left, controlSafeLeft)
+        }
         if (textArea.width() <= 0 || textArea.height() <= 0) return
 
         val layout = fitText(text, TITLE_PAINT, textArea.width().toFloat(), textArea.height().toFloat())
@@ -477,6 +650,24 @@ class LyricsSurfaceCallback : SurfaceCallback {
         }
     }
 
+    private fun configureTransportPaints() {
+        if (LyricsDisplaySettings.lightMode) {
+            TRANSPORT_BUTTON_PAINT.color = LIGHT_TRANSPORT_BUTTON_COLOR
+            TRANSPORT_BUTTON_STROKE_PAINT.color = LIGHT_TRANSPORT_STROKE_COLOR
+            TRANSPORT_ICON_FILL_PAINT.color = Color.BLACK
+            TRANSPORT_ICON_STROKE_PAINT.color = Color.BLACK
+        } else {
+            TRANSPORT_BUTTON_PAINT.color = DARK_TRANSPORT_BUTTON_COLOR
+            TRANSPORT_BUTTON_STROKE_PAINT.color = DARK_TRANSPORT_STROKE_COLOR
+            TRANSPORT_ICON_FILL_PAINT.color = Color.WHITE
+            TRANSPORT_ICON_STROKE_PAINT.color = Color.WHITE
+        }
+    }
+
+    private fun shouldShowTransportControls(): Boolean {
+        return LyricsDisplaySettings.shouldShowMediaControls()
+    }
+
     private fun textGradient(colors: List<Int>?, area: Rect): Shader? {
         val tint = colors
             ?.takeIf { it.isNotEmpty() }
@@ -532,6 +723,12 @@ class LyricsSurfaceCallback : SurfaceCallback {
         private const val MAX_TITLE_TEXT_SIZE = 96f
         private const val MIN_TITLE_TEXT_SIZE = 34f
         private const val TEXT_SIZE_STEP = 2f
+        private const val FOOTER_TEXT_SIZE_HEIGHT_RATIO = 24f / 480f
+        private const val FOOTER_TEXT_SIZE_MULTIPLIER = 1.5f
+        private const val MIN_FOOTER_TEXT_SIZE = 16f
+        private const val FOOTER_TEXT_REFERENCE_ASPECT_RATIO = 16f / 10f
+        private const val MIN_FOOTER_TEXT_ASPECT_SCALE = 0.90f
+        private const val MAX_FOOTER_TEXT_ASPECT_SCALE = 1.35f
         private const val LINE_SPACING_MULTIPLIER = 1.08f
         private const val LYRIC_TRANSITION_MILLIS = 700L
         private const val PREVIOUS_LYRIC_FADE_MULTIPLIER = 2.4f
@@ -548,8 +745,21 @@ class LyricsSurfaceCallback : SurfaceCallback {
         private const val PROGRESS_BOTTOM_MARGIN = 7f
         private const val PROGRESS_TRACK_STROKE = 5f
         private const val PROGRESS_FILL_STROKE = 5f
+        private const val TRANSPORT_BUTTON_HEIGHT_RATIO = 0.105f
+        private const val MIN_TRANSPORT_BUTTON_SIZE = 42f
+        private const val MAX_TRANSPORT_BUTTON_SIZE = 66f
+        private const val TRANSPORT_BUTTON_GAP_RATIO = 0.24f
+        private const val TRANSPORT_BUTTON_RADIUS_RATIO = 0.24f
+        private const val TRANSPORT_COLUMN_LEFT_RATIO = 0f
+        private const val MIN_TRANSPORT_COLUMN_LEFT = 8f
+        private const val MAX_TRANSPORT_COLUMN_LEFT = 14f
+        private const val TRANSPORT_TEXT_CLEARANCE = 24f
         private const val DARK_PROGRESS_TRACK_COLOR = 0xFF333333.toInt()
         private const val LIGHT_PROGRESS_TRACK_COLOR = 0xFFE0E0E0.toInt()
+        private const val DARK_TRANSPORT_BUTTON_COLOR = 0xAA000000.toInt()
+        private const val DARK_TRANSPORT_STROKE_COLOR = 0x88FFFFFF.toInt()
+        private const val LIGHT_TRANSPORT_BUTTON_COLOR = 0xDDFFFFFF.toInt()
+        private const val LIGHT_TRANSPORT_STROKE_COLOR = 0x88000000.toInt()
         private const val ELLIPSIS = "..."
         private const val ALBUM_TEXT_TINT_WEIGHT = 0.50f
 
@@ -598,5 +808,39 @@ class LyricsSurfaceCallback : SurfaceCallback {
             setShadowLayer(4f, 0f, 1f, Color.BLACK)
         }
 
+        private val TRANSPORT_BUTTON_PAINT = Paint().apply {
+            style = Paint.Style.FILL
+            isAntiAlias = true
+        }
+
+        private val TRANSPORT_BUTTON_STROKE_PAINT = Paint().apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 2f
+            isAntiAlias = true
+        }
+
+        private val TRANSPORT_ICON_FILL_PAINT = Paint().apply {
+            style = Paint.Style.FILL
+            isAntiAlias = true
+        }
+
+        private val TRANSPORT_ICON_STROKE_PAINT = Paint().apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 3f
+            strokeCap = Paint.Cap.ROUND
+            isAntiAlias = true
+        }
+
+    }
+
+    private data class TransportButton(
+        val action: TransportAction,
+        val bounds: RectF
+    )
+
+    private enum class TransportAction {
+        Previous,
+        PlayPause,
+        Next
     }
 }

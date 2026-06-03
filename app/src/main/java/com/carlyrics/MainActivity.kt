@@ -2,7 +2,6 @@ package com.carlyrics
 
 import android.content.ComponentName
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -24,15 +23,12 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
-import com.carlyrics.car.LyricsCarAppService
 import com.carlyrics.lyrics.CachedLyricsEntry
 import com.carlyrics.lyrics.LrcLibClient
 import com.carlyrics.lyrics.LyricsCache
 import com.carlyrics.lyrics.LyricsQuery
 import com.carlyrics.lyrics.LyricsState
 import com.carlyrics.media.MediaMonitorService
-import com.carlyrics.shizuku.AndroidAutoKicker
-import rikka.shizuku.Shizuku
 import java.text.DateFormat
 import java.util.Date
 import java.util.concurrent.Executors
@@ -63,32 +59,12 @@ class MainActivity : AppCompatActivity() {
     private val prefs by lazy { getSharedPreferences(PREFS_NAME, MODE_PRIVATE) }
     private var importJob: Future<*>? = null
     private var showingDetail = false
-    private var pendingKickAfterPermission = false
-
-    private val shizukuPermissionListener =
-        Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
-            if (requestCode != AndroidAutoKicker.SHIZUKU_PERMISSION_REQUEST_CODE) return@OnRequestPermissionResultListener
-            if (grantResult == PackageManager.PERMISSION_GRANTED) {
-                if (pendingKickAfterPermission) {
-                    pendingKickAfterPermission = false
-                    runAndroidAutoKick()
-                }
-            } else {
-                pendingKickAfterPermission = false
-                Toast.makeText(
-                    this,
-                    "Shizuku permission denied.",
-                    Toast.LENGTH_LONG
-                ).show()
-            }
-        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         supportActionBar?.hide()
         window.statusBarColor = BACKGROUND_COLOR
         window.navigationBarColor = BACKGROUND_COLOR
-        Shizuku.addRequestPermissionResultListener(shizukuPermissionListener)
         onBackPressedDispatcher.addCallback(
             this,
             object : OnBackPressedCallback(true) {
@@ -109,7 +85,6 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         cancelImport()
         importExecutor.shutdownNow()
-        Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener)
         super.onDestroy()
     }
 
@@ -133,10 +108,6 @@ class MainActivity : AppCompatActivity() {
         )
         root.addView(
             primaryButton("Import Manually") { showManualImport() },
-            horizontalMarginParams(topMarginDp = 0, bottomMarginDp = 10)
-        )
-        root.addView(
-            primaryButton("Fix AA Registration") { runAndroidAutoKick() },
             horizontalMarginParams(topMarginDp = 0, bottomMarginDp = 10)
         )
         root.addView(
@@ -171,88 +142,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         setContentView(root)
-    }
-
-    private fun runAndroidAutoKick() {
-        when (AndroidAutoKicker.status(this)) {
-            AndroidAutoKicker.Status.NotInstalled -> {
-                Toast.makeText(
-                    this,
-                    "Install Shizuku to enable the AA kick.",
-                    Toast.LENGTH_LONG
-                ).show()
-                resetCarAppComponentLocally()
-            }
-            AndroidAutoKicker.Status.NotRunning -> {
-                Toast.makeText(
-                    this,
-                    "Start Shizuku, then try again.",
-                    Toast.LENGTH_LONG
-                ).show()
-                resetCarAppComponentLocally()
-            }
-            AndroidAutoKicker.Status.PermissionRequired -> {
-                pendingKickAfterPermission = true
-                AndroidAutoKicker.requestPermission()
-            }
-            AndroidAutoKicker.Status.Ready -> performKick()
-        }
-    }
-
-    private fun performKick() {
-        Toast.makeText(this, "Kicking Android Auto...", Toast.LENGTH_SHORT).show()
-        importExecutor.submit {
-            val result = AndroidAutoKicker.kick(this)
-            mainHandler.post {
-                when (result) {
-                    is AndroidAutoKicker.Result.Success -> {
-                        val suffix = if (result.warnings.isEmpty()) {
-                            ""
-                        } else {
-                            " (warnings: ${result.warnings.joinToString("; ")})"
-                        }
-                        Toast.makeText(
-                            this,
-                            "AA kicked. Reconnect if not already.$suffix",
-                            Toast.LENGTH_LONG
-                        ).show()
-                    }
-                    is AndroidAutoKicker.Result.Failure -> {
-                        Toast.makeText(
-                            this,
-                            "Kick failed: ${result.message}",
-                            Toast.LENGTH_LONG
-                        ).show()
-                    }
-                }
-            }
-        }
-    }
-
-    private fun resetCarAppComponentLocally(silent: Boolean = false) {
-        val carService = ComponentName(this, LyricsCarAppService::class.java)
-        packageManager.setComponentEnabledSetting(
-            carService,
-            PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
-            PackageManager.DONT_KILL_APP
-        )
-        mainHandler.postDelayed(
-            {
-                packageManager.setComponentEnabledSetting(
-                    carService,
-                    PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
-                    PackageManager.DONT_KILL_APP
-                )
-                if (!silent) {
-                    Toast.makeText(
-                        this,
-                        "Car service re-registered. Unplug and reconnect.",
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-            },
-            CAR_SERVICE_RESET_DELAY_MS
-        )
     }
 
     private fun notificationPermissionButtonText(): String =
@@ -734,6 +623,5 @@ class MainActivity : AppCompatActivity() {
         private const val LIST_HEADER_TOP_PADDING_DP = 44
         private const val PREFS_NAME = "manual_import"
         private const val PREF_PENDING_SONG_LIST = "pending_song_list"
-        private const val CAR_SERVICE_RESET_DELAY_MS = 750L
     }
 }

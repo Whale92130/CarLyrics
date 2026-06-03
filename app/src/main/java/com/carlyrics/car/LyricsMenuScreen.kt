@@ -10,7 +10,8 @@ import androidx.car.app.model.Template
 import androidx.car.app.model.Toggle
 import com.carlyrics.AppReset
 
-class LyricsMenuScreen(carContext: CarContext) : Screen(carContext) {
+class
+LyricsMenuScreen(carContext: CarContext) : Screen(carContext) {
 
     override fun onGetTemplate(): Template {
         val lightModeRow = Row.Builder()
@@ -26,11 +27,51 @@ class LyricsMenuScreen(carContext: CarContext) : Screen(carContext) {
             )
             .build()
 
-        val resetRow = Row.Builder()
-            .setTitle("Reset")
-            .addText("Restore defaults and fetch lyrics again")
+        val clusterInstructionsRow = Row.Builder()
+            .setTitle("HUD nav")
+            .addText("Show lyrics as fake navigation prompts")
+            .setToggle(
+                Toggle.Builder { enabled ->
+                    LyricsDisplaySettings.setClusterInstructionsEnabled(enabled)
+                    invalidate()
+                }
+                    .setChecked(LyricsDisplaySettings.clusterInstructionsEnabled)
+                    .build()
+            )
+            .build()
+
+        val mediaControlsRow = Row.Builder()
+            .setTitle("Media controls")
+            .addText(LyricsDisplaySettings.mediaControlsMenuText())
+            .setToggle(
+                Toggle.Builder { enabled ->
+                    LyricsDisplaySettings.setMediaControlsEnabled(enabled)
+                    invalidate()
+                }
+                    .setChecked(LyricsDisplaySettings.mediaControlsEnabled)
+                    .build()
+            )
+            .build()
+
+        val measuredResolutionRow = Row.Builder()
+            .setTitle("Measured resolution")
+            .addText("${LyricsDisplaySettings.measuredSurfaceText()} | default on above 2:1")
+            .build()
+
+        val recenterLyricsRow = Row.Builder()
+            .setTitle("Recenter Lyrics")
+            .addText("Restore display layout defaults")
             .setOnClickListener {
                 LyricsDisplaySettings.reset()
+                invalidate()
+                finish()
+            }
+            .build()
+
+        val fixLyricsRow = Row.Builder()
+            .setTitle("Fix Lyrics")
+            .addText("Fetch lyrics again")
+            .setOnClickListener {
                 AppReset.request()
                 invalidate()
                 finish()
@@ -43,8 +84,12 @@ class LyricsMenuScreen(carContext: CarContext) : Screen(carContext) {
             .setHeaderAction(Action.BACK)
             .setSingleList(
                 ItemList.Builder()
+                    .addItem(recenterLyricsRow)
+                    .addItem(fixLyricsRow)
+                    .addItem(clusterInstructionsRow)
                     .addItem(lightModeRow)
-                    .addItem(resetRow)
+                    .addItem(mediaControlsRow)
+                    .addItem(measuredResolutionRow)
                     .build()
             )
             .build()
