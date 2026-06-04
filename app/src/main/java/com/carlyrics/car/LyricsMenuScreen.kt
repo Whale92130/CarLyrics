@@ -53,11 +53,6 @@ LyricsMenuScreen(carContext: CarContext) : Screen(carContext) {
             )
             .build()
 
-        val measuredResolutionRow = Row.Builder()
-            .setTitle("Measured resolution")
-            .addText("${LyricsDisplaySettings.measuredSurfaceText()} | default on above 2:1")
-            .build()
-
         val recenterLyricsRow = Row.Builder()
             .setTitle("Recenter Lyrics")
             .addText("Restore display layout defaults")
@@ -89,7 +84,6 @@ LyricsMenuScreen(carContext: CarContext) : Screen(carContext) {
                     .addItem(clusterInstructionsRow)
                     .addItem(lightModeRow)
                     .addItem(mediaControlsRow)
-                    .addItem(measuredResolutionRow)
                     .build()
             )
             .build()
