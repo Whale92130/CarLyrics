@@ -39,6 +39,7 @@ class LyricsSurfaceCallback : SurfaceCallback {
     private var displayedLyricText: String? = null
     private var previousLyricText: String? = null
     private var lyricTransitionStartedAtElapsedMillis: Long = 0L
+    private var lyricTapBounds: RectF? = null
     private val transportButtons = mutableListOf<TransportButton>()
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -90,6 +91,7 @@ class LyricsSurfaceCallback : SurfaceCallback {
         this.surfaceContainer = null
         this.visibleArea = null
         this.stableArea = null
+        lyricTapBounds = null
         transportButtons.clear()
         resetLyricTransition()
     }
@@ -97,14 +99,22 @@ class LyricsSurfaceCallback : SurfaceCallback {
     override fun onClick(x: Float, y: Float) {
         val action = transportButtons.firstOrNull { button ->
             button.bounds.contains(x, y)
-        }?.action ?: return
+        }?.action
 
-        when (action) {
-            TransportAction.Previous -> MediaControls.skipToPrevious()
-            TransportAction.PlayPause -> MediaControls.togglePlayPause()
-            TransportAction.Next -> MediaControls.skipToNext()
+        if (action != null) {
+            when (action) {
+                TransportAction.Previous -> MediaControls.skipToPrevious()
+                TransportAction.PlayPause -> MediaControls.togglePlayPause()
+                TransportAction.Next -> MediaControls.skipToNext()
+            }
+            render()
+            return
         }
-        render()
+
+        if (lyricTapBounds?.contains(x, y) == true) {
+            LyricsDisplaySettings.reset()
+            render()
+        }
     }
 
     private fun render() {
@@ -371,6 +381,7 @@ class LyricsSurfaceCallback : SurfaceCallback {
     }
 
     private fun drawCenteredLyrics(canvas: Canvas, area: Rect, track: TrackInfo?) {
+        lyricTapBounds = null
         val now = SystemClock.elapsedRealtime()
         val targetText = CurrentLyric.textFor(track, now)
         updateLyricTransition(track?.lookupKey, targetText, now)
@@ -390,7 +401,8 @@ class LyricsSurfaceCallback : SurfaceCallback {
                 text = previousText,
                 alpha = previousAlpha,
                 verticalOffset = -offset * eased,
-                darken = eased * PREVIOUS_LYRIC_DARKEN_WEIGHT
+                darken = eased * PREVIOUS_LYRIC_DARKEN_WEIGHT,
+                recordTapBounds = false
             )
             drawCenteredText(
                 canvas = canvas,
@@ -399,7 +411,8 @@ class LyricsSurfaceCallback : SurfaceCallback {
                 text = targetText,
                 alpha = eased,
                 verticalOffset = offset * (1f - eased),
-                darken = 0f
+                darken = 0f,
+                recordTapBounds = true
             )
         } else {
             previousLyricText = null
@@ -410,7 +423,8 @@ class LyricsSurfaceCallback : SurfaceCallback {
                 text = targetText,
                 alpha = 1f,
                 verticalOffset = 0f,
-                darken = 0f
+                darken = 0f,
+                recordTapBounds = true
             )
         }
     }
@@ -422,7 +436,8 @@ class LyricsSurfaceCallback : SurfaceCallback {
         text: String,
         alpha: Float,
         verticalOffset: Float,
-        darken: Float
+        darken: Float,
+        recordTapBounds: Boolean
     ) {
         val textArea = Rect(area)
         val horizontalMargin = (area.width() * HORIZONTAL_MARGIN_RATIO)
@@ -453,7 +468,15 @@ class LyricsSurfaceCallback : SurfaceCallback {
         TITLE_PAINT.alpha = (alpha.coerceIn(0f, 1f) * 255f).roundToInt()
         val lineHeight = lineHeight(TITLE_PAINT)
         val totalHeight = lineHeight * layout.size
-        var baseline = textArea.exactCenterY() + verticalOffset - totalHeight / 2f - TITLE_PAINT.ascent()
+        val firstBaseline = textArea.exactCenterY() + verticalOffset -
+            totalHeight / 2f -
+            TITLE_PAINT.ascent()
+
+        if (recordTapBounds) {
+            lyricTapBounds = lyricBounds(layout, TITLE_PAINT, textArea, firstBaseline, lineHeight)
+        }
+
+        var baseline = firstBaseline
 
         for (line in layout) {
             canvas.drawText(line, textArea.exactCenterX(), baseline, TITLE_PAINT)
@@ -462,6 +485,26 @@ class LyricsSurfaceCallback : SurfaceCallback {
         TITLE_PAINT.alpha = 255
         TITLE_PAINT.color = originalColor
         TITLE_PAINT.shader = null
+    }
+
+    private fun lyricBounds(
+        layout: List<String>,
+        paint: Paint,
+        textArea: Rect,
+        firstBaseline: Float,
+        lineHeight: Float
+    ): RectF {
+        val maxLineWidth = layout.maxOfOrNull { line -> paint.measureText(line) } ?: 0f
+        val centerX = textArea.exactCenterX()
+        val lastBaseline = firstBaseline + lineHeight * (layout.size - 1).coerceAtLeast(0)
+        return RectF(
+            centerX - maxLineWidth / 2f,
+            firstBaseline + paint.ascent(),
+            centerX + maxLineWidth / 2f,
+            lastBaseline + paint.descent()
+        ).apply {
+            inset(-LYRIC_TAP_PADDING, -LYRIC_TAP_PADDING)
+        }
     }
 
     private fun updateLyricTransition(trackKey: String?, targetText: String, nowElapsedMillis: Long) {
@@ -736,6 +779,7 @@ class LyricsSurfaceCallback : SurfaceCallback {
         private const val LYRIC_TRANSITION_OFFSET_RATIO = 0.035f
         private const val MIN_LYRIC_TRANSITION_OFFSET = 18f
         private const val MAX_LYRIC_TRANSITION_OFFSET = 34f
+        private const val LYRIC_TAP_PADDING = 28f
         private const val FOOTER_BOTTOM_MARGIN = 18f
         private const val FOOTER_HORIZONTAL_MARGIN = 48f
         private const val DOWNLOAD_ICON_SIZE = 18f

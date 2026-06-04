@@ -168,7 +168,7 @@ class HudTripPublisher(carContext: CarContext) {
         val maneuver = Maneuver.Builder(Maneuver.TYPE_STRAIGHT).build()
         val step = Step.Builder(cue)
             .setManeuver(maneuver)
-            .setRoad(destinationName)
+            .setRoad(cue)
             .build()
 
         val arrival = DateTimeWithZone.create(System.currentTimeMillis(), TimeZone.getDefault())
