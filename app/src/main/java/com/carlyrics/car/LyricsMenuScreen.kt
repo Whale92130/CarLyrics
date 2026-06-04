@@ -9,7 +9,6 @@ import androidx.car.app.model.Row
 import androidx.car.app.model.Template
 import androidx.car.app.model.Toggle
 import com.carlyrics.AppReset
-import com.carlyrics.media.MediaState
 
 class
 LyricsMenuScreen(carContext: CarContext) : Screen(carContext) {
@@ -54,9 +53,8 @@ LyricsMenuScreen(carContext: CarContext) : Screen(carContext) {
             )
             .build()
 
-        val nowPlayingRow = Row.Builder()
-            .setTitle("Now playing")
-            .addText(nowPlayingText())
+        val scrollAffordanceRow = Row.Builder()
+            .setTitle(INVISIBLE_ROW_TITLE)
             .build()
 
         val recenterLyricsRow = Row.Builder()
@@ -90,19 +88,13 @@ LyricsMenuScreen(carContext: CarContext) : Screen(carContext) {
                     .addItem(clusterInstructionsRow)
                     .addItem(lightModeRow)
                     .addItem(mediaControlsRow)
-                    .addItem(nowPlayingRow)
+                    .addItem(scrollAffordanceRow)
                     .build()
             )
             .build()
     }
 
-    private fun nowPlayingText(): String {
-        val track = MediaState.current ?: return "No song playing"
-        return listOfNotNull(
-            track.title?.takeIf { it.isNotBlank() },
-            track.artist?.takeIf { it.isNotBlank() }
-        )
-            .joinToString(" - ")
-            .ifBlank { "No song playing" }
+    companion object {
+        private const val INVISIBLE_ROW_TITLE = "\u200B"
     }
 }
