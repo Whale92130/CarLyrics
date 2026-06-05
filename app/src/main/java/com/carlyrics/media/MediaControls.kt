@@ -36,11 +36,21 @@ object MediaControls {
         }
     }
 
+    fun pause() {
+        controller?.transportControls?.pause()
+    }
+
     fun skipToPrevious() {
         controller?.transportControls?.skipToPrevious()
     }
 
     fun skipToNext() {
         controller?.transportControls?.skipToNext()
+    }
+
+    fun seekToAndPlay(positionMillis: Long) {
+        val controls = controller?.transportControls ?: return
+        controls.seekTo(positionMillis.coerceAtLeast(0L))
+        controls.play()
     }
 }

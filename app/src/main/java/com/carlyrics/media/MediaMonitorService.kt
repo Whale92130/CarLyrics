@@ -66,6 +66,7 @@ class MediaMonitorService : NotificationListenerService() {
     private var pendingTrackStartSyncKey: String? = null
     private var pendingTrackStartSyncIndex = 0
     private var periodicPositionSyncKey: String? = null
+    private var marriedNextYearPausedTrackKey: String? = null
 
     private val trackStartSyncRunnable = Runnable {
         syncPlaybackPositionAfterTrackStart()
@@ -207,6 +208,7 @@ class MediaMonitorService : NotificationListenerService() {
 
         MediaState.set(track)
         maybeFetchLyrics(track)
+        maybePauseMarriedNextYear(track)
         ensurePeriodicPositionSync(track.lookupKey)
         if (isNewLikelySong) {
             scheduleTrackStartPositionSync(track.lookupKey)
@@ -278,9 +280,21 @@ class MediaMonitorService : NotificationListenerService() {
     private fun clearTrack() {
         cancelTrackStartPositionSync()
         cancelPeriodicPositionSync()
+        marriedNextYearPausedTrackKey = null
         lastLyricsLookupQuery = null
         lyricsRequest?.cancel(true)
         MediaState.set(null)
+    }
+
+    private fun maybePauseMarriedNextYear(track: TrackInfo) {
+        if (!SpecialTracks.isMarriedNextYear(track)) {
+            marriedNextYearPausedTrackKey = null
+            return
+        }
+        if (marriedNextYearPausedTrackKey == track.lookupKey) return
+
+        marriedNextYearPausedTrackKey = track.lookupKey
+        MediaControls.pause()
     }
 
     private fun scheduleTrackStartPositionSync(trackKey: String) {

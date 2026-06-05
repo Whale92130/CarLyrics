@@ -18,6 +18,7 @@ import com.carlyrics.lyrics.CurrentLyric
 import com.carlyrics.lyrics.LyricsState
 import com.carlyrics.media.MediaControls
 import com.carlyrics.media.MediaState
+import com.carlyrics.media.SpecialTracks
 import com.carlyrics.media.TrackInfo
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -40,6 +41,8 @@ class LyricsSurfaceCallback : SurfaceCallback {
     private var previousLyricText: String? = null
     private var lyricTransitionStartedAtElapsedMillis: Long = 0L
     private var lyricTapBounds: RectF? = null
+    private var getMarriedButtonBounds: RectF? = null
+    private var dismissedGetMarriedTrackKey: String? = null
     private val transportButtons = mutableListOf<TransportButton>()
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -92,11 +95,20 @@ class LyricsSurfaceCallback : SurfaceCallback {
         this.visibleArea = null
         this.stableArea = null
         lyricTapBounds = null
+        getMarriedButtonBounds = null
         transportButtons.clear()
         resetLyricTransition()
     }
 
     override fun onClick(x: Float, y: Float) {
+        if (getMarriedButtonBounds?.contains(x, y) == true) {
+            dismissedGetMarriedTrackKey = MediaState.current?.lookupKey
+            getMarriedButtonBounds = null
+            MediaControls.seekToAndPlay(SpecialTracks.MARRIED_NEXT_YEAR_SEEK_MILLIS)
+            render()
+            return
+        }
+
         val action = transportButtons.firstOrNull { button ->
             button.bounds.contains(x, y)
         }?.action
@@ -136,7 +148,16 @@ class LyricsSurfaceCallback : SurfaceCallback {
             val area = drawableArea(canvas, container)
             configurePaints()
             canvas.drawColor(backgroundColor())
-            drawCenteredLyrics(canvas, area, track)
+            val showGetMarriedButton = shouldShowGetMarriedButton(track)
+            if (showGetMarriedButton) {
+                drawGetMarriedButton(canvas, area, track)
+            } else {
+                if (!SpecialTracks.isMarriedNextYear(track)) {
+                    dismissedGetMarriedTrackKey = null
+                }
+                getMarriedButtonBounds = null
+                drawCenteredLyrics(canvas, area, track)
+            }
             if (track != null) {
                 if (shouldShowTransportControls()) {
                     drawTransportControls(canvas, area)
@@ -382,6 +403,7 @@ class LyricsSurfaceCallback : SurfaceCallback {
 
     private fun drawCenteredLyrics(canvas: Canvas, area: Rect, track: TrackInfo?) {
         lyricTapBounds = null
+        getMarriedButtonBounds = null
         val now = SystemClock.elapsedRealtime()
         val targetText = CurrentLyric.textFor(track, now)
         updateLyricTransition(track?.lookupKey, targetText, now)
@@ -429,6 +451,60 @@ class LyricsSurfaceCallback : SurfaceCallback {
         }
     }
 
+    private fun drawGetMarriedButton(canvas: Canvas, area: Rect, track: TrackInfo?) {
+        lyricTapBounds = null
+        resetLyricTransition()
+        val textArea = lyricContentArea(area, track)
+        if (textArea.width() <= 0 || textArea.height() <= 0) return
+
+        val maxButtonWidth = textArea.width().toFloat()
+        val buttonWidth = (maxButtonWidth * MARRIED_BUTTON_WIDTH_RATIO * MARRIED_BUTTON_SIZE_MULTIPLIER)
+            .coerceAtLeast(MIN_MARRIED_BUTTON_WIDTH * MARRIED_BUTTON_SIZE_MULTIPLIER)
+            .coerceAtMost(maxButtonWidth)
+        val buttonHeight = (textArea.height() * MARRIED_BUTTON_HEIGHT_RATIO * MARRIED_BUTTON_SIZE_MULTIPLIER)
+            .coerceIn(
+                MIN_MARRIED_BUTTON_HEIGHT * MARRIED_BUTTON_SIZE_MULTIPLIER,
+                MAX_MARRIED_BUTTON_HEIGHT * MARRIED_BUTTON_SIZE_MULTIPLIER
+            )
+            .coerceAtMost(textArea.height().toFloat())
+        val left = textArea.exactCenterX() - buttonWidth / 2f
+        val top = textArea.exactCenterY() - buttonHeight / 2f
+        val bounds = RectF(left, top, left + buttonWidth, top + buttonHeight)
+        getMarriedButtonBounds = bounds
+
+        val outerGlowSize = MARRIED_BUTTON_OUTER_GLOW
+        val innerGlowSize = MARRIED_BUTTON_INNER_GLOW
+        val outerGlow = RectF(bounds).apply { inset(-outerGlowSize, -outerGlowSize) }
+        val innerGlow = RectF(bounds).apply { inset(-innerGlowSize, -innerGlowSize) }
+        MARRIED_BUTTON_OUTER_GLOW_PAINT.color = MARRIED_BUTTON_OUTER_GLOW_COLOR
+        MARRIED_BUTTON_INNER_GLOW_PAINT.color = MARRIED_BUTTON_INNER_GLOW_COLOR
+        MARRIED_BUTTON_STROKE_PAINT.strokeWidth = MARRIED_BUTTON_STROKE_WIDTH
+        canvas.drawRoundRect(
+            outerGlow,
+            MARRIED_BUTTON_RADIUS + outerGlowSize,
+            MARRIED_BUTTON_RADIUS + outerGlowSize,
+            MARRIED_BUTTON_OUTER_GLOW_PAINT
+        )
+        canvas.drawRoundRect(
+            innerGlow,
+            MARRIED_BUTTON_RADIUS + innerGlowSize,
+            MARRIED_BUTTON_RADIUS + innerGlowSize,
+            MARRIED_BUTTON_INNER_GLOW_PAINT
+        )
+        canvas.drawRoundRect(bounds, MARRIED_BUTTON_RADIUS, MARRIED_BUTTON_RADIUS, MARRIED_BUTTON_PAINT)
+        canvas.drawRoundRect(bounds, MARRIED_BUTTON_RADIUS, MARRIED_BUTTON_RADIUS, MARRIED_BUTTON_STROKE_PAINT)
+        fitMarriedButtonText(bounds)
+        MARRIED_BUTTON_TEXT_PAINT.setShadowLayer(
+            MARRIED_BUTTON_TEXT_SHADOW_RADIUS,
+            0f,
+            2f,
+            MARRIED_BUTTON_STROKE_COLOR
+        )
+        val baseline = bounds.centerY() -
+            (MARRIED_BUTTON_TEXT_PAINT.descent() + MARRIED_BUTTON_TEXT_PAINT.ascent()) / 2f
+        canvas.drawText(MARRIED_BUTTON_TEXT, bounds.centerX(), baseline, MARRIED_BUTTON_TEXT_PAINT)
+    }
+
     private fun drawCenteredText(
         canvas: Canvas,
         area: Rect,
@@ -439,18 +515,7 @@ class LyricsSurfaceCallback : SurfaceCallback {
         darken: Float,
         recordTapBounds: Boolean
     ) {
-        val textArea = Rect(area)
-        val horizontalMargin = (area.width() * HORIZONTAL_MARGIN_RATIO)
-            .coerceIn(MIN_HORIZONTAL_MARGIN, MAX_HORIZONTAL_MARGIN)
-            .roundToInt()
-        val verticalMargin = (area.height() * VERTICAL_MARGIN_RATIO)
-            .coerceIn(MIN_VERTICAL_MARGIN, MAX_VERTICAL_MARGIN)
-            .roundToInt()
-        textArea.inset(horizontalMargin, verticalMargin)
-        if (track != null && shouldShowTransportControls()) {
-            val controlSafeLeft = area.left + transportControlsReservedWidth(area).roundToInt()
-            textArea.left = max(textArea.left, controlSafeLeft)
-        }
+        val textArea = lyricContentArea(area, track)
         if (textArea.width() <= 0 || textArea.height() <= 0) return
 
         val layout = fitText(text, TITLE_PAINT, textArea.width().toFloat(), textArea.height().toFloat())
@@ -486,6 +551,38 @@ class LyricsSurfaceCallback : SurfaceCallback {
         TITLE_PAINT.color = originalColor
         TITLE_PAINT.shader = null
     }
+
+    private fun lyricContentArea(area: Rect, track: TrackInfo?): Rect {
+        val textArea = Rect(area)
+        val horizontalMargin = (area.width() * HORIZONTAL_MARGIN_RATIO)
+            .coerceIn(MIN_HORIZONTAL_MARGIN, MAX_HORIZONTAL_MARGIN)
+            .roundToInt()
+        val verticalMargin = (area.height() * VERTICAL_MARGIN_RATIO)
+            .coerceIn(MIN_VERTICAL_MARGIN, MAX_VERTICAL_MARGIN)
+            .roundToInt()
+        textArea.inset(horizontalMargin, verticalMargin)
+        if (track != null && shouldShowTransportControls()) {
+            val controlSafeLeft = area.left + transportControlsReservedWidth(area).roundToInt()
+            textArea.left = max(textArea.left, controlSafeLeft)
+        }
+        return textArea
+    }
+
+    private fun fitMarriedButtonText(bounds: RectF) {
+        var textSize = (bounds.height() * MARRIED_BUTTON_TEXT_HEIGHT_RATIO)
+            .coerceIn(MIN_MARRIED_BUTTON_TEXT_SIZE, MAX_MARRIED_BUTTON_TEXT_SIZE)
+        val maxWidth = bounds.width() - MARRIED_BUTTON_HORIZONTAL_PADDING * 2f
+        while (textSize > MIN_MARRIED_BUTTON_TEXT_SIZE) {
+            MARRIED_BUTTON_TEXT_PAINT.textSize = textSize
+            if (MARRIED_BUTTON_TEXT_PAINT.measureText(MARRIED_BUTTON_TEXT) <= maxWidth) return
+            textSize -= TEXT_SIZE_STEP
+        }
+        MARRIED_BUTTON_TEXT_PAINT.textSize = MIN_MARRIED_BUTTON_TEXT_SIZE
+    }
+
+    private fun shouldShowGetMarriedButton(track: TrackInfo?): Boolean =
+        SpecialTracks.isMarriedNextYear(track) &&
+            dismissedGetMarriedTrackKey != track?.lookupKey
 
     private fun lyricBounds(
         layout: List<String>,
@@ -773,6 +870,22 @@ class LyricsSurfaceCallback : SurfaceCallback {
         private const val MIN_FOOTER_TEXT_ASPECT_SCALE = 0.90f
         private const val MAX_FOOTER_TEXT_ASPECT_SCALE = 1.35f
         private const val LINE_SPACING_MULTIPLIER = 1.08f
+        private const val MARRIED_BUTTON_TEXT = "Skip to the Good Part"
+        private const val MARRIED_BUTTON_SIZE_MULTIPLIER = 1.5f
+        private const val MARRIED_BUTTON_WIDTH_RATIO = 0.62f
+        private const val MARRIED_BUTTON_HEIGHT_RATIO = 0.26f
+        private const val MIN_MARRIED_BUTTON_WIDTH = 300f
+        private const val MIN_MARRIED_BUTTON_HEIGHT = 96f
+        private const val MAX_MARRIED_BUTTON_HEIGHT = 190f
+        private const val MARRIED_BUTTON_RADIUS = 28f
+        private const val MARRIED_BUTTON_OUTER_GLOW = 26f
+        private const val MARRIED_BUTTON_INNER_GLOW = 12f
+        private const val MARRIED_BUTTON_STROKE_WIDTH = 4f
+        private const val MARRIED_BUTTON_TEXT_SHADOW_RADIUS = 7f
+        private const val MARRIED_BUTTON_TEXT_HEIGHT_RATIO = 0.40f
+        private const val MIN_MARRIED_BUTTON_TEXT_SIZE = 34f
+        private const val MAX_MARRIED_BUTTON_TEXT_SIZE = 92f
+        private const val MARRIED_BUTTON_HORIZONTAL_PADDING = 34f
         private const val LYRIC_TRANSITION_MILLIS = 700L
         private const val PREVIOUS_LYRIC_FADE_MULTIPLIER = 2.4f
         private const val PREVIOUS_LYRIC_DARKEN_WEIGHT = 0.72f
@@ -804,6 +917,10 @@ class LyricsSurfaceCallback : SurfaceCallback {
         private const val DARK_TRANSPORT_STROKE_COLOR = 0x88FFFFFF.toInt()
         private const val LIGHT_TRANSPORT_BUTTON_COLOR = 0xDDFFFFFF.toInt()
         private const val LIGHT_TRANSPORT_STROKE_COLOR = 0x88000000.toInt()
+        private const val MARRIED_BUTTON_COLOR = 0xFF0F7A3A.toInt()
+        private const val MARRIED_BUTTON_STROKE_COLOR = 0xFF86EFAC.toInt()
+        private const val MARRIED_BUTTON_OUTER_GLOW_COLOR = 0x6634D399
+        private const val MARRIED_BUTTON_INNER_GLOW_COLOR = 0x9916A34A.toInt()
         private const val ELLIPSIS = "..."
         private const val ALBUM_TEXT_TINT_WEIGHT = 0.50f
 
@@ -873,6 +990,40 @@ class LyricsSurfaceCallback : SurfaceCallback {
             strokeWidth = 3f
             strokeCap = Paint.Cap.ROUND
             isAntiAlias = true
+        }
+
+        private val MARRIED_BUTTON_PAINT = Paint().apply {
+            color = MARRIED_BUTTON_COLOR
+            style = Paint.Style.FILL
+            isAntiAlias = true
+            setShadowLayer(16f, 0f, 4f, Color.BLACK)
+        }
+
+        private val MARRIED_BUTTON_STROKE_PAINT = Paint().apply {
+            color = MARRIED_BUTTON_STROKE_COLOR
+            style = Paint.Style.STROKE
+            strokeWidth = MARRIED_BUTTON_STROKE_WIDTH
+            isAntiAlias = true
+        }
+
+        private val MARRIED_BUTTON_OUTER_GLOW_PAINT = Paint().apply {
+            color = MARRIED_BUTTON_OUTER_GLOW_COLOR
+            style = Paint.Style.FILL
+            isAntiAlias = true
+        }
+
+        private val MARRIED_BUTTON_INNER_GLOW_PAINT = Paint().apply {
+            color = MARRIED_BUTTON_INNER_GLOW_COLOR
+            style = Paint.Style.FILL
+            isAntiAlias = true
+        }
+
+        private val MARRIED_BUTTON_TEXT_PAINT = Paint().apply {
+            color = Color.WHITE
+            textAlign = Paint.Align.CENTER
+            isAntiAlias = true
+            isFakeBoldText = true
+            setShadowLayer(MARRIED_BUTTON_TEXT_SHADOW_RADIUS, 0f, 2f, MARRIED_BUTTON_STROKE_COLOR)
         }
 
     }
