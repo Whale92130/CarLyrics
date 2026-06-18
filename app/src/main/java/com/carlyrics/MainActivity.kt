@@ -8,6 +8,7 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.text.TextUtils
 import android.text.InputType
@@ -24,11 +25,14 @@ import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import com.carlyrics.lyrics.CachedLyricsEntry
+import com.carlyrics.lyrics.CurrentLyric
 import com.carlyrics.lyrics.LrcLibClient
 import com.carlyrics.lyrics.LyricsCache
 import com.carlyrics.lyrics.LyricsQuery
 import com.carlyrics.lyrics.LyricsState
+import com.carlyrics.media.MediaState
 import com.carlyrics.media.MediaMonitorService
+import com.carlyrics.web.BackSeatLyricsServer
 import java.text.DateFormat
 import java.util.Date
 import java.util.concurrent.Executors
@@ -59,6 +63,7 @@ class MainActivity : AppCompatActivity() {
     private val prefs by lazy { getSharedPreferences(PREFS_NAME, MODE_PRIVATE) }
     private var importJob: Future<*>? = null
     private var showingDetail = false
+    private var shareStatusRunnable: Runnable? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -84,6 +89,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         cancelImport()
+        stopShareStatusUpdates()
         importExecutor.shutdownNow()
         super.onDestroy()
     }
@@ -95,6 +101,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showList() {
         showingDetail = false
+        stopShareStatusUpdates()
         val entries = lyricsCache.listEntries()
             .filter { entry -> entry.state is LyricsState.Found }
 
@@ -114,6 +121,10 @@ class MainActivity : AppCompatActivity() {
             primaryButton(notificationPermissionButtonText()) {
                 openNotificationPermissionSettings()
             },
+            horizontalMarginParams(topMarginDp = 0, bottomMarginDp = 10)
+        )
+        root.addView(
+            primaryButton("Back-seat Lyrics") { showBackSeatLyrics() },
             horizontalMarginParams(topMarginDp = 0, bottomMarginDp = 10)
         )
         root.addView(
@@ -178,6 +189,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showManualImport() {
         showingDetail = true
+        stopShareStatusUpdates()
         val root = rootLayout()
         root.addView(
             header(
@@ -236,6 +248,142 @@ class MainActivity : AppCompatActivity() {
         }
         root.addView(scrollView, weightedContentParams())
         setContentView(root)
+    }
+
+    private fun showBackSeatLyrics() {
+        showingDetail = true
+        stopShareStatusUpdates()
+
+        val root = rootLayout()
+        root.addView(
+            header(
+                "Back-seat Lyrics",
+                actionText = "Back",
+                topPaddingDp = LIST_HEADER_TOP_PADDING_DP
+            ) { showList() }
+        )
+
+        val statusText = bodyText(
+            "",
+            SECONDARY_TEXT_COLOR,
+            topMarginDp = 0
+        ).apply {
+            maxLines = 4
+        }
+        val urlText = TextView(this).apply {
+            setTextColor(PRIMARY_TEXT_COLOR)
+            textSize = 24f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextIsSelectable(true)
+            setPadding(0, 10.dp(), 0, 8.dp())
+        }
+        val currentTrackText = bodyText(
+            "",
+            MUTED_TEXT_COLOR,
+            topMarginDp = 18
+        ).apply {
+            maxLines = 5
+        }
+        val toggleButton = primaryButton("") { view ->
+            val button = view as Button
+            if (BackSeatLyricsServer.isRunning) {
+                BackSeatLyricsServer.stop()
+            } else {
+                BackSeatLyricsServer.start()
+            }
+            mainHandler.postDelayed({
+                updateBackSeatLyricsViews(statusText, urlText, currentTrackText, button)
+            }, SERVER_STATUS_REFRESH_AFTER_TOGGLE_MILLIS)
+        }
+
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(22.dp(), 10.dp(), 22.dp(), 32.dp())
+            addView(statusText)
+            addView(urlText)
+            addView(toggleButton, topMarginParams(14))
+            addView(currentTrackText)
+            addView(
+                bodyText(
+                    "Connect other devices to this phone's hotspot and open the URL above.",
+                    SECONDARY_TEXT_COLOR,
+                    topMarginDp = 18
+                ).apply {
+                    maxLines = 4
+                }
+            )
+        }
+
+        root.addView(
+            ScrollView(this).apply {
+                addView(
+                    content,
+                    ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    )
+                )
+            },
+            weightedContentParams()
+        )
+        setContentView(root)
+        updateBackSeatLyricsViews(statusText, urlText, currentTrackText, toggleButton)
+        startShareStatusUpdates(statusText, urlText, currentTrackText, toggleButton)
+    }
+
+    private fun updateBackSeatLyricsViews(
+        statusText: TextView,
+        urlText: TextView,
+        currentTrackText: TextView,
+        toggleButton: Button
+    ) {
+        val error = BackSeatLyricsServer.lastError
+        val running = BackSeatLyricsServer.isRunning
+        val shareUrl = BackSeatLyricsServer.shareUrl()
+        statusText.text = when {
+            running -> "Sharing lyrics on this phone's local network."
+            error != null -> "Server stopped: $error"
+            else -> "Sharing is off."
+        }
+        urlText.text = when {
+            running && shareUrl != null -> shareUrl
+            running -> "Waiting for local IP address"
+            else -> "Not sharing"
+        }
+        toggleButton.text = if (running) "Stop Sharing" else "Start Sharing"
+
+        val track = MediaState.current
+        currentTrackText.text = if (track == null) {
+            "Current song: none"
+        } else {
+            val artist = track.artist?.let { " - $it" }.orEmpty()
+            val lyric = CurrentLyric.textFor(
+                track,
+                SystemClock.elapsedRealtime()
+            )
+            "Current song: ${track.title}$artist\nCurrent lyric: $lyric"
+        }
+    }
+
+    private fun startShareStatusUpdates(
+        statusText: TextView,
+        urlText: TextView,
+        currentTrackText: TextView,
+        toggleButton: Button
+    ) {
+        val runnable = object : Runnable {
+            override fun run() {
+                updateBackSeatLyricsViews(statusText, urlText, currentTrackText, toggleButton)
+                mainHandler.postDelayed(this, SERVER_STATUS_POLL_MILLIS)
+            }
+        }
+        shareStatusRunnable = runnable
+        mainHandler.postDelayed(runnable, SERVER_STATUS_POLL_MILLIS)
+    }
+
+    private fun stopShareStatusUpdates() {
+        shareStatusRunnable?.let { runnable -> mainHandler.removeCallbacks(runnable) }
+        shareStatusRunnable = null
     }
 
     private fun startManualImport(
@@ -360,6 +508,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showDetail(entry: CachedLyricsEntry) {
         showingDetail = true
+        stopShareStatusUpdates()
         val root = rootLayout()
         root.addView(
             header(
@@ -621,6 +770,8 @@ class MainActivity : AppCompatActivity() {
         private val MUTED_TEXT_COLOR = Color.rgb(138, 148, 158)
         private const val DEFAULT_HEADER_TOP_PADDING_DP = 18
         private const val LIST_HEADER_TOP_PADDING_DP = 44
+        private const val SERVER_STATUS_POLL_MILLIS = 1_000L
+        private const val SERVER_STATUS_REFRESH_AFTER_TOGGLE_MILLIS = 250L
         private const val PREFS_NAME = "manual_import"
         private const val PREF_PENDING_SONG_LIST = "pending_song_list"
     }
