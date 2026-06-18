@@ -16,6 +16,7 @@ import java.net.Socket
 import java.net.SocketException
 import java.nio.charset.StandardCharsets
 import java.util.Collections
+import kotlin.math.roundToInt
 
 object BackSeatLyricsServer {
 
@@ -180,6 +181,10 @@ object BackSeatLyricsServer {
             track?.title,
             track?.artist
         ).joinToString(" - ")
+        val albumColor = track?.albumColors?.firstOrNull()
+        val albumTint = albumColor?.let {
+            albumGlowTint(it, LyricsDisplaySettings.lightMode)
+        }
 
         return buildString {
             append('{')
@@ -212,7 +217,17 @@ object BackSeatLyricsServer {
             append(',')
             appendJsonField("songLabel", songLabel)
             append(',')
-            appendJsonField("accentColor", track?.albumColors?.firstOrNull()?.let(::cssColor).orEmpty())
+            appendJsonField("accentColor", albumColor?.let(::cssColor).orEmpty())
+            append(',')
+            appendJsonField(
+                "albumGlowStrong",
+                albumTint?.let { cssRgba(it, ALBUM_GLOW_STRONG_ALPHA) }.orEmpty()
+            )
+            append(',')
+            appendJsonField(
+                "albumGlowSoft",
+                albumTint?.let { cssRgba(it, ALBUM_GLOW_SOFT_ALPHA) }.orEmpty()
+            )
             append(',')
             append("\"lightMode\":")
             append(LyricsDisplaySettings.lightMode)
@@ -277,6 +292,31 @@ object BackSeatLyricsServer {
     private fun cssColor(color: Int): String =
         "#%06X".format(color and 0x00FFFFFF)
 
+    private fun cssRgba(color: Int, alpha: Float): String =
+        "rgba(${channel(color, 16)}, ${channel(color, 8)}, ${channel(color, 0)}, ${alpha.coerceIn(0f, 1f)})"
+
+    private fun albumGlowTint(color: Int, lightMode: Boolean): Int {
+        val base = if (lightMode) LIGHT_TEXT_COLOR else DARK_TEXT_COLOR
+        return blend(base, color, ALBUM_GLOW_TINT_WEIGHT)
+    }
+
+    private fun blend(base: Int, accent: Int, accentWeight: Float): Int {
+        val baseWeight = 1f - accentWeight
+        val red = (channel(base, 16) * baseWeight + channel(accent, 16) * accentWeight)
+            .roundToInt()
+            .coerceIn(0, 255)
+        val green = (channel(base, 8) * baseWeight + channel(accent, 8) * accentWeight)
+            .roundToInt()
+            .coerceIn(0, 255)
+        val blue = (channel(base, 0) * baseWeight + channel(accent, 0) * accentWeight)
+            .roundToInt()
+            .coerceIn(0, 255)
+        return OPAQUE_ALPHA or (red shl 16) or (green shl 8) or blue
+    }
+
+    private fun channel(color: Int, shift: Int): Int =
+        color ushr shift and 0xFF
+
     private fun scoreAddress(address: InterfaceAddress): Int {
         val name = address.interfaceName.lowercase()
         val host = address.address
@@ -311,6 +351,8 @@ object BackSeatLyricsServer {
               --button-stroke: rgba(255, 255, 255, 0.54);
               --shadow: 0 2px 8px rgba(0, 0, 0, 0.95);
               --accent: #ffffff;
+              --album-glow-strong: rgba(255, 255, 255, 0.28);
+              --album-glow-soft: rgba(255, 255, 255, 0.16);
             }
             * { box-sizing: border-box; }
             html, body { width: 100%; min-height: 100%; }
@@ -378,6 +420,9 @@ object BackSeatLyricsServer {
               display: none;
             }
             .lyric-line {
+              display: -webkit-box;
+              -webkit-box-orient: vertical;
+              -webkit-line-clamp: 2;
               width: min(100%, 1500px);
               margin: 0 auto;
               padding: clamp(9px, 2vh, 18px) 0;
@@ -388,6 +433,7 @@ object BackSeatLyricsServer {
               text-shadow: var(--shadow);
               overflow-wrap: anywhere;
               text-wrap: balance;
+              overflow: hidden;
               transition:
                 color 420ms cubic-bezier(0.22, 1, 0.36, 1),
                 font-size 420ms cubic-bezier(0.22, 1, 0.36, 1),
@@ -400,12 +446,12 @@ object BackSeatLyricsServer {
             .lyric-line.active {
               color: var(--fg);
               font-weight: 900;
-              font-size: clamp(42px, 13vmin, 124px);
+              font-size: var(--active-font-size, clamp(23px, 5.75vmin, 51px));
               line-height: 1.02;
               text-shadow:
                 var(--shadow),
-                0 0 18px rgba(255, 255, 255, 0.28),
-                0 0 34px rgba(255, 255, 255, 0.16);
+                0 0 18px var(--album-glow-strong),
+                0 0 34px var(--album-glow-soft);
               opacity: 1;
               transform: scale(1.025);
             }
@@ -413,7 +459,7 @@ object BackSeatLyricsServer {
               position: absolute;
               left: clamp(48px, 10vw, 96px);
               right: clamp(48px, 10vw, 96px);
-              bottom: max(18px, calc(env(safe-area-inset-bottom) + 18px));
+              bottom: max(26px, calc(env(safe-area-inset-bottom) + 26px));
               display: flex;
               align-items: center;
               justify-content: center;
@@ -477,7 +523,7 @@ object BackSeatLyricsServer {
                 padding: 36vh 0 42vh;
               }
               .lyric-line.active {
-                font-size: clamp(44px, 15.5vw, 82px);
+                font-size: var(--active-font-size, clamp(21px, 8.05vw, 39px));
               }
               .lyric-line {
                 font-size: clamp(18px, 7vw, 34px);
@@ -528,6 +574,8 @@ object BackSeatLyricsServer {
             function update(data) {
               document.body.classList.toggle('light', Boolean(data.lightMode));
               document.documentElement.style.setProperty('--accent', data.accentColor || 'var(--fg)');
+              document.documentElement.style.setProperty('--album-glow-strong', data.albumGlowStrong || 'rgba(255, 255, 255, 0.28)');
+              document.documentElement.style.setProperty('--album-glow-soft', data.albumGlowSoft || 'rgba(255, 255, 255, 0.16)');
               renderLyrics(data);
               elements.connection.textContent = 'Live';
               elements.song.textContent = data.songLabel || data.title || 'No song playing';
@@ -566,17 +614,109 @@ object BackSeatLyricsServer {
 
               if (index !== lastIndex) {
                 const previous = elements.lyrics.querySelector('.lyric-line.active');
-                if (previous) previous.classList.remove('active');
+                if (previous) {
+                  previous.classList.remove('active');
+                  previous.style.removeProperty('--active-font-size');
+                }
                 const active = elements.lyrics.querySelector('.lyric-line[data-index="' + index + '"]');
                 if (active) {
                   active.classList.add('active');
+                  fitActiveLyric(active);
                   requestAnimationFrame(() => {
+                    fitActiveLyric(active);
                     active.scrollIntoView({ block: 'center', behavior: 'smooth' });
                   });
                 }
                 lastIndex = index;
               }
             }
+
+            function fitActiveLyric(node) {
+              if (!node) return;
+              node.style.removeProperty('--active-font-size');
+
+              const normalSize = normalLyricFontSize(node);
+              if (!Number.isFinite(normalSize)) return;
+
+              const targetSize = normalSize * 1.15;
+              const normalLineCount = lyricLineCount(node, normalSize);
+              if (normalLineCount > 2) {
+                node.style.setProperty('--active-font-size', normalSize.toFixed(2) + 'px');
+                return;
+              }
+
+              const targetLineCount = lyricLineCount(node, targetSize);
+              if (normalLineCount === 1 && targetLineCount > 1) {
+                node.style.setProperty('--active-font-size', normalSize.toFixed(2) + 'px');
+                return;
+              }
+              if (targetLineCount <= 2) {
+                node.style.setProperty('--active-font-size', targetSize.toFixed(2) + 'px');
+                return;
+              }
+
+              let low = normalSize;
+              let high = targetSize;
+              while (high - low > 0.5) {
+                const mid = (low + high) / 2;
+                if (lyricLineCount(node, mid) <= 2) {
+                  low = mid;
+                } else {
+                  high = mid;
+                }
+              }
+              node.style.setProperty('--active-font-size', low.toFixed(2) + 'px');
+            }
+
+            function normalLyricFontSize(node) {
+              const parent = node.parentElement;
+              if (!parent) return Number.NaN;
+
+              const probe = node.cloneNode(true);
+              probe.className = 'lyric-line';
+              probe.style.position = 'absolute';
+              probe.style.visibility = 'hidden';
+              probe.style.pointerEvents = 'none';
+              probe.style.width = node.clientWidth + 'px';
+              probe.style.left = '-9999px';
+              parent.appendChild(probe);
+              const size = Number.parseFloat(getComputedStyle(probe).fontSize);
+              probe.remove();
+              return size;
+            }
+
+            function lyricLineCount(node, fontSize) {
+              const parent = node.parentElement;
+              if (!parent) return 3;
+
+              const probe = node.cloneNode(true);
+              probe.className = 'lyric-line active';
+              probe.style.position = 'absolute';
+              probe.style.visibility = 'hidden';
+              probe.style.pointerEvents = 'none';
+              probe.style.width = node.clientWidth + 'px';
+              probe.style.left = '-9999px';
+              probe.style.display = 'block';
+              probe.style.webkitLineClamp = 'unset';
+              probe.style.fontSize = fontSize.toFixed(2) + 'px';
+              parent.appendChild(probe);
+
+              const styles = getComputedStyle(probe);
+              const lineHeight = Number.parseFloat(styles.lineHeight);
+              const paddingY =
+                (Number.parseFloat(styles.paddingTop) || 0) +
+                (Number.parseFloat(styles.paddingBottom) || 0);
+              const textHeight = Math.max(0, probe.scrollHeight - paddingY);
+              const lineCount = Number.isFinite(lineHeight) && lineHeight > 0
+                ? Math.ceil((textHeight - 0.5) / lineHeight)
+                : 3;
+              probe.remove();
+              return lineCount;
+            }
+
+            window.addEventListener('resize', () => {
+              fitActiveLyric(elements.lyrics.querySelector('.lyric-line.active'));
+            });
 
             async function poll() {
               try {
@@ -608,4 +748,10 @@ object BackSeatLyricsServer {
     )
 
     private const val CLIENT_TIMEOUT_MILLIS = 2_000
+    private const val DARK_TEXT_COLOR = 0xFFFFFFFF.toInt()
+    private const val LIGHT_TEXT_COLOR = 0xFF000000.toInt()
+    private const val OPAQUE_ALPHA = 0xFF000000.toInt()
+    private const val ALBUM_GLOW_TINT_WEIGHT = 0.85f
+    private const val ALBUM_GLOW_STRONG_ALPHA = 0.58f
+    private const val ALBUM_GLOW_SOFT_ALPHA = 0.34f
 }

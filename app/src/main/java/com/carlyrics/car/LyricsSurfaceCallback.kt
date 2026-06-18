@@ -28,7 +28,7 @@ import kotlin.math.sqrt
  * Draws the current LRCLIB lyric line onto the
  * [NavigationTemplate][androidx.car.app.navigation.model.NavigationTemplate] map surface.
  *
- * The text is wrapped and dynamically sized so the current lyric line stays large
+ * The text is dynamically sized so the current lyric stays within two lines
  * without being clipped by the surface edges.
  */
 class LyricsSurfaceCallback : SurfaceCallback {
@@ -687,12 +687,14 @@ class LyricsSurfaceCallback : SurfaceCallback {
         while (size > MIN_TITLE_TEXT_SIZE) {
             paint.textSize = size
             val lines = wrapText(text, paint, maxWidth)
-            if (lineHeight(paint) * lines.size <= maxHeight) return lines
+            if (lines.size <= MAX_LYRIC_LINES && lineHeight(paint) * lines.size <= maxHeight) {
+                return lines
+            }
             size -= TEXT_SIZE_STEP
         }
 
         paint.textSize = MIN_TITLE_TEXT_SIZE
-        return wrapText(text, paint, maxWidth)
+        return clampToTwoLines(wrapText(text, paint, maxWidth), paint, maxWidth)
     }
 
     private fun wrapText(text: String, paint: Paint, maxWidth: Float): List<String> {
@@ -719,6 +721,12 @@ class LyricsSurfaceCallback : SurfaceCallback {
 
         if (current.isNotBlank()) lines += current
         return lines
+    }
+
+    private fun clampToTwoLines(lines: List<String>, paint: Paint, maxWidth: Float): List<String> {
+        if (lines.size <= MAX_LYRIC_LINES) return lines
+        val secondLine = lines.drop(1).joinToString(" ")
+        return listOf(lines.first(), ellipsize(secondLine, paint, maxWidth))
     }
 
     private fun breakLongWord(word: String, paint: Paint, maxWidth: Float): List<String> {
@@ -860,8 +868,9 @@ class LyricsSurfaceCallback : SurfaceCallback {
         private const val MAX_HORIZONTAL_MARGIN = 88f
         private const val MIN_VERTICAL_MARGIN = 28f
         private const val MAX_VERTICAL_MARGIN = 80f
-        private const val MAX_TITLE_TEXT_SIZE = 96f
+        private const val MAX_TITLE_TEXT_SIZE = 280f
         private const val MIN_TITLE_TEXT_SIZE = 34f
+        private const val MAX_LYRIC_LINES = 2
         private const val TEXT_SIZE_STEP = 2f
         private const val FOOTER_TEXT_SIZE_HEIGHT_RATIO = 24f / 480f
         private const val FOOTER_TEXT_SIZE_MULTIPLIER = 1.5f
