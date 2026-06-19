@@ -14,6 +14,7 @@ import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
 import com.carlyrics.AppReset
+import com.carlyrics.LyricsResync
 import com.carlyrics.lyrics.LrcLibClient
 import com.carlyrics.lyrics.LyricsCache
 import com.carlyrics.lyrics.LyricsQuery
@@ -58,6 +59,9 @@ class MediaMonitorService : NotificationListenerService() {
     private val resetListener = AppReset.Listener {
         mainHandler.post { resetAndRefetchLyrics() }
     }
+    private val resyncListener = LyricsResync.Listener {
+        mainHandler.post { resyncLyricsWithoutFetch() }
+    }
 
     private var attached: MediaController? = null
     private var lyricsRequest: Future<*>? = null
@@ -94,6 +98,7 @@ class MediaMonitorService : NotificationListenerService() {
                 componentName
             )
             AppReset.observe(resetListener)
+            LyricsResync.observe(resyncListener)
             attachToBestController(sessionManager.getActiveSessions(componentName))
         } catch (e: SecurityException) {
             Log.w(TAG, "Permission not granted yet", e)
@@ -106,12 +111,14 @@ class MediaMonitorService : NotificationListenerService() {
             sessionManager.removeOnActiveSessionsChangedListener(sessionsChangedListener)
         }
         AppReset.stopObserving(resetListener)
+        LyricsResync.stopObserving(resyncListener)
         detach()
         clearTrack()
     }
 
     override fun onDestroy() {
         AppReset.stopObserving(resetListener)
+        LyricsResync.stopObserving(resyncListener)
         cancelTrackStartPositionSync()
         cancelPeriodicPositionSync()
         lyricsRequest?.cancel(true)
@@ -153,7 +160,8 @@ class MediaMonitorService : NotificationListenerService() {
     private fun publish(
         packageName: String?,
         metadata: MediaMetadata?,
-        playbackState: PlaybackState?
+        playbackState: PlaybackState?,
+        fetchLyrics: Boolean = true
     ) {
         if (shouldIgnoreForLyrics(packageName)) {
             clearTrack()
@@ -207,12 +215,30 @@ class MediaMonitorService : NotificationListenerService() {
         val track = mergeWithCurrent(observedTrack, MediaState.current)
 
         MediaState.set(track)
-        maybeFetchLyrics(track)
+        if (fetchLyrics) {
+            maybeFetchLyrics(track)
+        }
         maybePauseMarriedNextYear(track)
         ensurePeriodicPositionSync(track.lookupKey)
         if (isNewLikelySong) {
             scheduleTrackStartPositionSync(track.lookupKey)
         }
+    }
+
+    private fun resyncLyricsWithoutFetch() {
+        Log.d(TAG, "Resync requested; refreshing playback position without fetching lyrics")
+        val controller = attached
+        if (controller == null) {
+            Log.d(TAG, "No attached media controller to resync")
+            return
+        }
+
+        publish(
+            packageName = controller.packageName,
+            metadata = controller.metadata,
+            playbackState = controller.playbackState,
+            fetchLyrics = false
+        )
     }
 
     private fun resetAndRefetchLyrics() {

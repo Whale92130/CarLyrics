@@ -9,6 +9,7 @@ import androidx.car.app.model.Row
 import androidx.car.app.model.Template
 import androidx.car.app.model.Toggle
 import com.carlyrics.AppReset
+import com.carlyrics.LyricsResync
 
 class
 LyricsMenuScreen(carContext: CarContext) : Screen(carContext) {
@@ -58,10 +59,11 @@ LyricsMenuScreen(carContext: CarContext) : Screen(carContext) {
             .build()
 
         val recenterLyricsRow = Row.Builder()
-            .setTitle("Recenter Lyrics")
-            .addText("Restore display layout defaults")
+            .setTitle("Recenter / Resync Lyrics")
+            .addText("Restore layout and resync timing")
             .setOnClickListener {
                 LyricsDisplaySettings.reset()
+                LyricsResync.request()
                 invalidate()
                 finish()
             }
